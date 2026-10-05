@@ -1,72 +1,174 @@
 import streamlit as st
 
-# Configuración de la página
 st.set_page_config(page_title="Pañol de Mecatrónica", page_icon="⚙️", layout="wide")
 
 # ==============================================================================
-# 1. CAPA DE DATOS (FUNCIONALIDAD TEMPORAL / CONTRATO DE INTEGRACIÓN)
-# Cuando conecten Supabase, tu compañero solo reemplazará estas 6 funciones.
+# 1. CAPA DE DATOS (ADAPTADA AL ESQUEMA EXACTO DE SUPABASE)
 # ==============================================================================
 
-if 'inventario' not in st.session_state:
-    st.session_state.inventario = [
-        {"id": 1, "nombre": "Arduino Uno", "categoria": "Microcontroladores", "cantidad": 5, "minimo": 2},
-        {"id": 2, "nombre": "Sensor Ultrasónico HC-SR04", "categoria": "Sensores", "cantidad": 2, "minimo": 3},
-        {"id": 3, "nombre": "Servomotor SG90", "categoria": "Actuadores", "cantidad": 0, "minimo": 2},
-    ]
-
-if 'pedidos' not in st.session_state:
-    st.session_state.pedidos = []
+conn = st.connection("sql", type="sql")
 
 def obtener_inventario():
-    return st.session_state.inventario
+    """Consulta componentes uniendo la tabla de categorías"""
+    try:
+        sql = """
+            SELECT 
+                c.id, 
+                c.nombre, 
+                COALESCE(cat.nombre, 'Sin Categoría') AS categoria, 
+                c.cantidad, 
+                c.stock_minimo AS minimo 
+            FROM public.componentes c 
+            LEFT JOIN public.categorias cat ON c.categoria_id = cat.id 
+            ORDER BY c.id ASC;
+        """
+        df = conn.query(sql, ttl=0)
+        return df.to_dict(orient="records")
+    except Exception as e:
+        st.error(f"Error al obtener el inventario: {e}")
+        return []
 
 def obtener_pedidos():
-    return st.session_state.pedidos
+    """Consulta pedidos uniendo alumnos, usuarios, detalles, componentes y estados"""
+    try:
+        sql = """
+            SELECT 
+                p.id AS pedido_id, 
+                CONCAT(u.nombre, ' ', u.apellido) AS alumno, 
+                comp.nombre AS producto, 
+                pd.cantidad, 
+                e.nombre AS estado,
+                pd.componente_id
+            FROM public.pedidos p
+            JOIN public.alumnos a ON p.alumno_id = a.id
+            JOIN public.usuarios u ON a.usuario_id = u.id
+            JOIN public.pedido_detalle pd ON pd.pedido_id = p.id
+            JOIN public.componentes comp ON pd.componente_id = comp.id
+            JOIN public.estado e ON p.estado_id = e.id
+            ORDER BY p.id DESC;
+        """
+        df = conn.query(sql, ttl=0)
+        return df.to_dict(orient="records")
+    except Exception as e:
+        st.error(f"Error al obtener pedidos: {e}")
+        return []
 
-def crear_pedido(nombre_alumno, producto_nombre, cantidad):
-    nuevo_id = len(st.session_state.pedidos) + 1
-    st.session_state.pedidos.append({
-        "id": nuevo_id,
-        "alumno": nombre_alumno,
-        "producto": producto_nombre,
-        "cantidad": cantidad,
-        "estado": "Pendiente"
-    })
+def crear_pedido(nombre_completo, componente_id, cantidad):
+    """Crea el alumno/usuario temporal si no existe, luego el pedido y su detalle"""
+    with conn.session as session:
+        # 1. Obtener ID del estado 'Pendiente'
+        res_estado = session.execute("SELECT id FROM public.estado WHERE nombre = 'Pendiente';").fetchone()
+        if not res_estado:
+            st.error("No se encontró el estado 'Pendiente' en la base de datos.")
+            return
+        estado_id = res_estado[0]
 
-def aprobar_pedido(pedido_id):
-    for p in st.session_state.pedidos:
-        if p["id"] == pedido_id and p["estado"] == "Pendiente":
-            for prod in st.session_state.inventario:
-                if prod["nombre"] == p["producto"]:
-                    if prod["cantidad"] >= p["cantidad"]:
-                        prod["cantidad"] -= p["cantidad"]
-                        p["estado"] = "Aceptado"
-                        return True
-            break
-    return False
+        # 2. Separar nombre y apellido
+        partes = nombre_completo.strip().split(" ", 1)
+        nombre = partes[0]
+        apellido = partes[1] if len(partes) > 1 else ""
+        email_fake = f"{nombre.lower()}.{apellido.lower()}@escuela.edu"
+
+        # 3. Buscar o crear Usuario y Alumno
+        res_user = session.execute(
+            "SELECT a.id FROM public.alumnos a JOIN public.usuarios u ON a.usuario_id = u.id WHERE u.nombre = :nom AND u.apellido = :ape;",
+            {"nom": nombre, "ape": apellido}
+        ).fetchone()
+
+        if res_user:
+            alumno_id = res_user[0]
+        else:
+            # Crear usuario
+            res_ins_u = session.execute(
+                "INSERT INTO public.usuarios (nombre, apellido, email) VALUES (:nom, :ape, :email) RETURNING id;",
+                {"nom": nombre, "ape": apellido, "email": email_fake}
+            ).fetchone()
+            usuario_id = res_ins_u[0]
+
+            # Crear alumno
+            res_ins_a = session.execute(
+                "INSERT INTO public.alumnos (usuario_id, curso) VALUES (:uid, 'Mecatrónica') RETURNING id;",
+                {"uid": usuario_id}
+            ).fetchone()
+            alumno_id = res_ins_a[0]
+
+        # 4. Insertar la cabecera del Pedido
+        res_ped = session.execute(
+            "INSERT INTO public.pedidos (alumno_id, estado_id) VALUES (:aid, :eid) RETURNING id;",
+            {"aid": alumno_id, "eid": estado_id}
+        ).fetchone()
+        pedido_id = res_ped[0]
+
+        # 5. Insertar el Detalle del Pedido
+        session.execute(
+            "INSERT INTO public.pedido_detalle (pedido_id, componente_id, cantidad) VALUES (:pid, :cid, :cant);",
+            {"pid": pedido_id, "cid": componente_id, "cant": cantidad}
+        )
+        session.commit()
+
+def aprobar_pedido(pedido_id, componente_id, cantidad):
+    """Descuenta stock del componente y pasa el pedido a estado 'Aceptado'"""
+    with conn.session as session:
+        res_estado = session.execute("SELECT id FROM public.estado WHERE nombre = 'Aceptado';").fetchone()
+        if res_estado:
+            estado_id = res_estado[0]
+            # Restar stock
+            session.execute(
+                "UPDATE public.componentes SET cantidad = cantidad - :cant WHERE id = :cid AND cantidad >= :cant;",
+                {"cant": cantidad, "cid": componente_id}
+            )
+            # Cambiar estado
+            session.execute(
+                "UPDATE public.pedidos SET estado_id = :eid WHERE id = :pid;",
+                {"eid": estado_id, "pid": pedido_id}
+            )
+            session.commit()
 
 def rechazar_pedido(pedido_id):
-    for p in st.session_state.pedidos:
-        if p["id"] == pedido_id:
-            p["estado"] = "Rechazado"
-            break
+    """Pasa el pedido a estado 'Rechazado'"""
+    with conn.session as session:
+        res_estado = session.execute("SELECT id FROM public.estado WHERE nombre = 'Rechazado';").fetchone()
+        if res_estado:
+            estado_id = res_estado[0]
+            session.execute(
+                "UPDATE public.pedidos SET estado_id = :eid WHERE id = :pid;",
+                {"eid": estado_id, "pid": pedido_id}
+            )
+            session.commit()
 
-def modificar_stock(producto_nombre, nueva_cantidad):
-    for prod in st.session_state.inventario:
-        if prod["nombre"] == producto_nombre:
-            prod["cantidad"] = nueva_cantidad
-            break
+def modificar_stock(componente_id, nueva_cantidad):
+    """Actualiza la cantidad en la tabla componentes"""
+    with conn.session as session:
+        session.execute(
+            "UPDATE public.componentes SET cantidad = :cant WHERE id = :cid;",
+            {"cant": nueva_cantidad, "cid": componente_id}
+        )
+        session.commit()
 
-def crear_material(nombre, categoria, cantidad, minimo):
-    nuevo_id = len(st.session_state.inventario) + 1
-    st.session_state.inventario.append({
-        "id": nuevo_id,
-        "nombre": nombre,
-        "categoria": categoria,
-        "cantidad": cantidad,
-        "minimo": minimo
-    })
+def crear_material(nombre, categoria_nombre, cantidad, stock_minimo):
+    """Crea la categoría si no existe y luego el componente"""
+    with conn.session as session:
+        # Buscar o crear categoría
+        res_cat = session.execute(
+            "SELECT id FROM public.categorias WHERE LOWER(nombre) = LOWER(:cat);",
+            {"cat": categoria_nombre}
+        ).fetchone()
+
+        if res_cat:
+            categoria_id = res_cat[0]
+        else:
+            res_ins_cat = session.execute(
+                "INSERT INTO public.categorias (nombre) VALUES (:cat) RETURNING id;",
+                {"cat": categoria_nombre}
+            ).fetchone()
+            categoria_id = res_ins_cat[0]
+
+        # Insertar componente
+        session.execute(
+            "INSERT INTO public.componentes (nombre, categoria_id, cantidad, stock_minimo) VALUES (:nom, :cat_id, :cant, :min);",
+            {"nom": nombre, "cat_id": categoria_id, "cant": cantidad, "min": stock_minimo}
+        )
+        session.commit()
 
 
 # ==============================================================================
@@ -107,7 +209,7 @@ st.title("Sistema de Gestión de Inventario")
 inventario_actual = obtener_inventario()
 
 if not inventario_actual:
-    st.info("El catálogo del pañol está vacío actualmente.")
+    st.info("No se encontraron materiales cargados en la base de datos.")
 else:
     categorias_disponibles = sorted(list(set(item["categoria"] for item in inventario_actual)))
 
@@ -123,19 +225,17 @@ else:
     with col_prod:
         prod_sel = st.selectbox("2. Selecciona Componente:", nombres_productos)
 
-    # Búsqueda del objeto seleccionado
     prod_obj = next((p for p in productos_filtrados if p["nombre"] == prod_sel), productos_filtrados[0] if productos_filtrados else None)
 
     if prod_obj:
         st.subheader("Estado de Disponibilidad:")
         if prod_obj["cantidad"] == 0:
-            st.error(f"❌ AGOTADO - No hay {prod_obj['nombre']} disponible.")
+            st.error(f"❌ AGOTADO - No hay {prod_obj['nombre']} disponible en este momento.")
         elif prod_obj["cantidad"] <= prod_obj["minimo"]:
-            st.warning(f"⚠️ POCO STOCK - Quedan solo {prod_obj['cantidad']} unidad(es).")
+            st.warning(f"⚠️ POCO STOCK - Quedan solo {prod_obj['cantidad']} unidad(es) de {prod_obj['nombre']}.")
         else:
-            st.success(f"✅ DISPONIBLE - Hay {prod_obj['cantidad']} unidad(es).")
+            st.success(f"✅ DISPONIBLE - Hay {prod_obj['cantidad']} unidad(es) de {prod_obj['nombre']}.")
 
-        # Formulario para pedidos
         if st.session_state.rol == "Alumno" and prod_obj["cantidad"] > 0:
             st.write("---")
             st.subheader("Solicitar Material al Pañol")
@@ -148,8 +248,8 @@ else:
                     if not nombre_alumno.strip():
                         st.error("Por favor ingresa tu nombre antes de enviar.")
                     else:
-                        crear_pedido(nombre_alumno.strip(), prod_obj["nombre"], cant_solicitada)
-                        st.success("¡Solicitud enviada con éxito! Espera la llamada del pañolero.")
+                        crear_pedido(nombre_alumno.strip(), prod_obj["id"], cant_solicitada)
+                        st.success("¡Solicitud enviada con éxito! Revisa en el mostrador del pañol.")
                         st.rerun()
 
 
@@ -179,15 +279,13 @@ if st.session_state.rol == "Profesor":
                 c_info, c_ok, c_cancel = st.columns([3, 1, 1])
                 c_info.write(f"👤 **{pedido['alumno']}** solicita: **{pedido['cantidad']}x {pedido['producto']}**")
 
-                if c_ok.button("✅ Aceptar", key=f"ok_{pedido['id']}"):
-                    if aprobar_pedido(pedido['id']):
-                        st.success(f"Pedido de {pedido['alumno']} aprobado y stock actualizado.")
-                    else:
-                        st.error("No se pudo aprobar (stock insuficiente).")
+                if c_ok.button("✅ Aceptar", key=f"ok_{pedido['pedido_id']}"):
+                    aprobar_pedido(pedido['pedido_id'], pedido['componente_id'], pedido['cantidad'])
+                    st.success(f"Pedido de {pedido['alumno']} aprobado.")
                     st.rerun()
 
-                if c_cancel.button("❌ Rechazar", key=f"cancel_{pedido['id']}"):
-                    rechazar_pedido(pedido['id'])
+                if c_cancel.button("❌ Rechazar", key=f"cancel_{pedido['pedido_id']}"):
+                    rechazar_pedido(pedido['pedido_id'])
                     st.warning(f"Pedido de {pedido['alumno']} rechazado.")
                     st.rerun()
 
@@ -202,10 +300,10 @@ if st.session_state.rol == "Profesor":
             prod_a_editar = st.selectbox("Seleccionar componente a modificar:", todos_los_nombres)
             
             prod_editar_obj = next(p for p in inventario_actual if p["nombre"] == prod_a_editar)
-            nueva_cant_stock = st.number_input("Nueva cantidad total:", min_value=0, value=prod_editar_obj["cantidad"])
+            nueva_cant_stock = st.number_input("Nueva cantidad total en pañol:", min_value=0, value=prod_editar_obj["cantidad"])
 
             if st.button("Guardar Cambios de Stock"):
-                modificar_stock(prod_a_editar, nueva_cant_stock)
+                modificar_stock(prod_editar_obj["id"], nueva_cant_stock)
                 st.success(f"Stock de '{prod_a_editar}' modificado correctamente.")
                 st.rerun()
 
@@ -218,7 +316,7 @@ if st.session_state.rol == "Profesor":
             cant_inicial = st.number_input("Cantidad Inicial:", min_value=1, value=5)
             min_alerta = st.number_input("Stock Mínimo para Alerta:", min_value=1, value=2)
 
-            btn_crear_mat = st.form_submit_button("Guardar Componente")
+            btn_crear_mat = st.form_submit_button("Guardar Componente en Supabase")
 
             if btn_crear_mat:
                 if nuevo_nombre.strip() and nueva_categoria.strip():
@@ -228,7 +326,7 @@ if st.session_state.rol == "Profesor":
                         cant_inicial, 
                         min_alerta
                     )
-                    st.success(f"¡Componente '{nuevo_nombre}' agregado al catálogo con éxito!")
+                    st.success(f"¡Componente '{nuevo_nombre}' guardado en Supabase con éxito!")
                     st.rerun()
                 else:
                     st.error("Por favor completa el nombre y la categoría.")
