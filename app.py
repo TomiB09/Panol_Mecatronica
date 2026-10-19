@@ -1,234 +1,185 @@
 import streamlit as st
+import pandas as pd
 
-# Configuración de la página
-st.set_page_config(page_title="Pañol de Mecatrónica", page_icon="⚙️", layout="wide")
+# 1. Configuración de la página
+st.set_page_config(
+    page_title="Materiales Meca - ORT",
+    page_icon="⚙️",
+    layout="wide"
+)
 
-# ==============================================================================
-# 1. CAPA DE DATOS (FUNCIONALIDAD TEMPORAL / CONTRATO DE INTEGRACIÓN)
-# Cuando conecten Supabase, tu compañero solo reemplazará estas 6 funciones.
-# ==============================================================================
+# 2. CSS Personalizado para un diseño más elaborado y moderno
+st.markdown("""
+    <style>
+    /* Estilos del encabezado */
+    .main-title {
+        font-size: 2.4rem;
+        font-weight: 800;
+        color: #002B66;
+        margin-bottom: 0px;
+    }
+    .sub-title {
+        font-size: 1.1rem;
+        color: #666;
+        margin-top: -5px;
+        margin-bottom: 20px;
+    }
+    
+    /* Tarjetas de materiales */
+    .material-card {
+        background-color: #f8f9fa;
+        border-left: 5px solid #002B66;
+        padding: 15px;
+        border-radius: 8px;
+        margin-bottom: 10px;
+        box-shadow: 0 2px 4px rgba(0,0,0,0.05);
+    }
+    .stock-badge-high {
+        color: #1b5e20;
+        background-color: #c8e6c9;
+        padding: 4px 10px;
+        border-radius: 12px;
+        font-weight: bold;
+    }
+    .stock-badge-low {
+        color: #b71c1c;
+        background-color: #ffcdd2;
+        padding: 4px 10px;
+        border-radius: 12px;
+        font-weight: bold;
+    }
+    </style>
+""", unsafe_allow_html=True)
 
-if 'inventario' not in st.session_state:
-    st.session_state.inventario = [
-        {"id": 1, "nombre": "Arduino Uno", "categoria": "Microcontroladores", "cantidad": 5, "minimo": 2},
-        {"id": 2, "nombre": "Sensor Ultrasónico HC-SR04", "categoria": "Sensores", "cantidad": 2, "minimo": 3},
-        {"id": 3, "nombre": "Servomotor SG90", "categoria": "Actuadores", "cantidad": 0, "minimo": 2},
-    ]
+# ---------------------------------------------------------
+# ENCABEZADO CON LOGO DE ORT
+# ---------------------------------------------------------
+col_header, col_logo = st.columns([4, 1])
 
-if 'pedidos' not in st.session_state:
-    st.session_state.pedidos = []
+with col_header:
+    st.markdown("<h1 class='main-title'>⚙️ Materiales Meca</h1>", unsafe_allow_html=True)
+    st.markdown("<p class='sub-title'>Pañol de Mecatrónica • Escuela ORT</p>", unsafe_allow_html=True)
 
-def obtener_inventario():
-    return st.session_state.inventario
+with col_logo:
+    # Carga la imagen del logo que guardaste localmente
+    try:
+        st.image("logo_ort.png", width=140)
+    except:
+        st.write("📷 *(Logo ORT)*")
 
-def obtener_pedidos():
-    return st.session_state.pedidos
+st.divider()
 
-def crear_pedido(nombre_alumno, producto_nombre, cantidad):
-    nuevo_id = len(st.session_state.pedidos) + 1
-    st.session_state.pedidos.append({
-        "id": nuevo_id,
-        "alumno": nombre_alumno,
-        "producto": producto_nombre,
-        "cantidad": cantidad,
-        "estado": "Pendiente"
-    })
+# ---------------------------------------------------------
+# SELECCIÓN DE ROL (Botones Grandes)
+# ---------------------------------------------------------
+if "rol" not in st.session_state:
+    st.session_state["rol"] = "Alumno"
 
-def aprobar_pedido(pedido_id):
-    for p in st.session_state.pedidos:
-        if p["id"] == pedido_id and p["estado"] == "Pendiente":
-            for prod in st.session_state.inventario:
-                if prod["nombre"] == p["producto"]:
-                    if prod["cantidad"] >= p["cantidad"]:
-                        prod["cantidad"] -= p["cantidad"]
-                        p["estado"] = "Aceptado"
-                        return True
-            break
-    return False
+st.subheader("👤 Seleccioná tu perfil")
 
-def rechazar_pedido(pedido_id):
-    for p in st.session_state.pedidos:
-        if p["id"] == pedido_id:
-            p["estado"] = "Rechazado"
-            break
+col_alumno, col_profesor = st.columns(2)
 
-def modificar_stock(producto_nombre, nueva_cantidad):
-    for prod in st.session_state.inventario:
-        if prod["nombre"] == producto_nombre:
-            prod["cantidad"] = nueva_cantidad
-            break
-
-def crear_material(nombre, categoria, cantidad, minimo):
-    nuevo_id = len(st.session_state.inventario) + 1
-    st.session_state.inventario.append({
-        "id": nuevo_id,
-        "nombre": nombre,
-        "categoria": categoria,
-        "cantidad": cantidad,
-        "minimo": minimo
-    })
-
-
-# ==============================================================================
-# 2. CONTROL DE ACCESO Y ROLES (BARRA LATERAL)
-# ==============================================================================
-if 'rol' not in st.session_state:
-    st.session_state.rol = "Alumno"
-
-st.sidebar.title("⚙️ Pañol Mecatrónica")
-st.sidebar.write(f"Rol actual: **{st.session_state.rol}**")
-
-modo_seleccionado = st.sidebar.radio("Vista de usuario:", ["Alumno", "Profesor"])
-
-if modo_seleccionado == "Profesor" and st.session_state.rol != "Profesor":
-    clave = st.sidebar.text_input("Contraseña de docente:", type="password")
-    if st.sidebar.button("Ingresar como Profesor"):
-        if clave == "admin123":
-            st.session_state.rol = "Profesor"
-            st.rerun()
-        else:
-            st.sidebar.error("Contraseña incorrecta")
-
-elif modo_seleccionado == "Alumno" and st.session_state.rol != "Alumno":
-    st.session_state.rol = "Alumno"
-    st.rerun()
-
-if st.session_state.rol == "Profesor":
-    if st.sidebar.button("🚪 Cerrar Sesión"):
-        st.session_state.rol = "Alumno"
+with col_alumno:
+    btn_alumno = st.button(
+        "🎓 ALUMNO",
+        use_container_width=True,
+        type="primary" if st.session_state["rol"] == "Alumno" else "secondary"
+    )
+    if btn_alumno:
+        st.session_state["rol"] = "Alumno"
         st.rerun()
 
+with col_profesor:
+    btn_profesor = st.button(
+        "👨‍🏫 PROFESOR",
+        use_container_width=True,
+        type="primary" if st.session_state["rol"] == "Profesor" else "secondary"
+    )
+    if btn_profesor:
+        st.session_state["rol"] = "Profesor"
+        st.rerun()
 
-# ==============================================================================
-# 3. INTERFAZ PRINCIPAL - VISTA DE ALUMNO
-# ==============================================================================
-st.title("Sistema de Gestión de Inventario")
+st.caption(f"Perfil seleccionado actualmente: **{st.session_state['rol']}**")
+st.write("")
 
-inventario_actual = obtener_inventario()
+# ---------------------------------------------------------
+# DATOS DE EJEMPLO (Se reemplaza por las consultas SQL a Supabase)
+# ---------------------------------------------------------
+datos_inventario = [
+    {"id": 1, "nombre": "Arduino UNO Rev3", "categoria": "Microcontroladores", "stock": 15, "ubicacion": "Caja A1", "descripcion": "Placa de desarrollo ATmega328P"},
+    {"id": 2, "nombre": "ESP32 NodeMCU", "categoria": "Microcontroladores", "stock": 8, "ubicacion": "Caja A2", "descripcion": "Módulo Wi-Fi y Bluetooth dual core"},
+    {"id": 3, "nombre": "Servomotor SG90 9g", "categoria": "Actuadores y Motores", "stock": 2, "ubicacion": "Caja B1", "descripcion": "Servomotor de torque 1.8 kg/cm"},
+    {"id": 4, "nombre": "Motor Pasó a Paso NEMA 17", "categoria": "Actuadores y Motores", "stock": 6, "ubicacion": "Caja B3", "descripcion": "Motor stepper para impresión 3D / CNC"},
+    {"id": 5, "nombre": "Sensor Ultrasónico HC-SR04", "categoria": "Sensores", "stock": 20, "ubicacion": "Caja C1", "descripcion": "Medidor de distancia por ultrasonido"},
+    {"id": 6, "nombre": "Sensor de Temperatura DHT11", "categoria": "Sensores", "stock": 0, "ubicacion": "Caja C2", "descripcion": "Sensor digital de humedad y temperatura"},
+]
 
-if not inventario_actual:
-    st.info("El catálogo del pañol está vacío actualmente.")
+df_inventario = pd.DataFrame(datos_inventario)
+
+# ---------------------------------------------------------
+# BÚSQUEDA Y CATEGORÍAS DE MATERIALES
+# ---------------------------------------------------------
+st.subheader("🔍 Buscador de Componentes")
+
+col_search, col_cat = st.columns([3, 2])
+
+with col_search:
+    busqueda = st.text_input("Buscar por nombre o descripción:", placeholder="Ej. Arduino, Sensor, Servo...")
+
+with col_cat:
+    categorias_disponibles = ["Todas"] + list(df_inventario["categoria"].unique())
+    categoria_sel = st.selectbox("Filtrar por categoría:", categorias_disponibles)
+
+# Filtrar DataFrame según búsqueda y categoría
+df_filtrado = df_inventario.copy()
+
+if categoria_sel != "Todas":
+    df_filtrado = df_filtrado[df_filtrado["categoria"] == categoria_sel]
+
+if busqueda:
+    df_filtrado = df_filtrado[
+        df_filtrado["nombre"].str.contains(busqueda, case=False) | 
+        df_filtrado["descripcion"].str.contains(busqueda, case=False)
+    ]
+
+# ---------------------------------------------------------
+# VISUALIZACIÓN POR CATEGORÍA Y DETALLE DE STOCK
+# ---------------------------------------------------------
+st.write("")
+
+if df_filtrado.empty:
+    st.warning("No se encontraron componentes con los criterios ingresados.")
 else:
-    categorias_disponibles = sorted(list(set(item["categoria"] for item in inventario_actual)))
-
-    st.header("📦 Consulta y Solicitud de Materiales")
-    col_cat, col_prod = st.columns(2)
-
-    with col_cat:
-        cat_sel = st.selectbox("1. Selecciona Categoría:", categorias_disponibles)
-
-    productos_filtrados = [p for p in inventario_actual if p["categoria"] == cat_sel]
-    nombres_productos = [p["nombre"] for p in productos_filtrados]
-
-    with col_prod:
-        prod_sel = st.selectbox("2. Selecciona Componente:", nombres_productos)
-
-    # Búsqueda del objeto seleccionado
-    prod_obj = next((p for p in productos_filtrados if p["nombre"] == prod_sel), productos_filtrados[0] if productos_filtrados else None)
-
-    if prod_obj:
-        st.subheader("Estado de Disponibilidad:")
-        if prod_obj["cantidad"] == 0:
-            st.error(f"❌ AGOTADO - No hay {prod_obj['nombre']} disponible.")
-        elif prod_obj["cantidad"] <= prod_obj["minimo"]:
-            st.warning(f"⚠️ POCO STOCK - Quedan solo {prod_obj['cantidad']} unidad(es).")
-        else:
-            st.success(f"✅ DISPONIBLE - Hay {prod_obj['cantidad']} unidad(es).")
-
-        # Formulario para pedidos
-        if st.session_state.rol == "Alumno" and prod_obj["cantidad"] > 0:
-            st.write("---")
-            st.subheader("Solicitar Material al Pañol")
-            with st.form("form_solicitud_alumno", clear_on_submit=True):
-                nombre_alumno = st.text_input("Nombre y Apellido del Alumno:")
-                cant_solicitada = st.number_input("Cantidad requerida:", min_value=1, max_value=prod_obj["cantidad"], value=1)
-                btn_enviar = st.form_submit_button("Enviar Solicitud")
-
-                if btn_enviar:
-                    if not nombre_alumno.strip():
-                        st.error("Por favor ingresa tu nombre antes de enviar.")
-                    else:
-                        crear_pedido(nombre_alumno.strip(), prod_obj["nombre"], cant_solicitada)
-                        st.success("¡Solicitud enviada con éxito! Espera la llamada del pañolero.")
-                        st.rerun()
-
-
-# ==============================================================================
-# 4. INTERFAZ PRINCIPAL - PANEL DE PROFESOR
-# ==============================================================================
-if st.session_state.rol == "Profesor":
-    st.write("---")
-    st.header("🛠️ Panel de Control Docente")
-
-    tab_pedidos, tab_stock, tab_nuevo = st.tabs([
-        "📋 Solicitudes Pendientes", 
-        "📊 Gestionar Stock", 
-        "➕ Agregar Nuevo Material"
-    ])
-
-    # --- PESTAÑA 1: SOLICITUDES ---
-    with tab_pedidos:
-        st.subheader("Solicitudes de Alumnos")
-        pedidos_totales = obtener_pedidos()
-        pedidos_pendientes = [p for p in pedidos_totales if p["estado"] == "Pendiente"]
-
-        if not pedidos_pendientes:
-            st.info("No hay solicitudes pendientes en este momento.")
-        else:
-            for pedido in pedidos_pendientes:
-                c_info, c_ok, c_cancel = st.columns([3, 1, 1])
-                c_info.write(f"👤 **{pedido['alumno']}** solicita: **{pedido['cantidad']}x {pedido['producto']}**")
-
-                if c_ok.button("✅ Aceptar", key=f"ok_{pedido['id']}"):
-                    if aprobar_pedido(pedido['id']):
-                        st.success(f"Pedido de {pedido['alumno']} aprobado y stock actualizado.")
-                    else:
-                        st.error("No se pudo aprobar (stock insuficiente).")
-                    st.rerun()
-
-                if c_cancel.button("❌ Rechazar", key=f"cancel_{pedido['id']}"):
-                    rechazar_pedido(pedido['id'])
-                    st.warning(f"Pedido de {pedido['alumno']} rechazado.")
-                    st.rerun()
-
-    # --- PESTAÑA 2: GESTIÓN DE STOCK ---
-    with tab_stock:
-        st.subheader("Inventario General")
-        if inventario_actual:
-            st.dataframe(inventario_actual, use_container_width=True)
-
-            st.write("### Actualizar Cantidad en Pañol")
-            todos_los_nombres = [p["nombre"] for p in inventario_actual]
-            prod_a_editar = st.selectbox("Seleccionar componente a modificar:", todos_los_nombres)
+    # Agrupar componentes por categorías
+    categorias_presentes = df_filtrado["categoria"].unique()
+    
+    for cat in categorias_presentes:
+        with st.expander(f"📁 **{cat}**", expanded=True):
+            items_cat = df_filtrado[df_filtrado["categoria"] == cat]
             
-            prod_editar_obj = next(p for p in inventario_actual if p["nombre"] == prod_a_editar)
-            nueva_cant_stock = st.number_input("Nueva cantidad total:", min_value=0, value=prod_editar_obj["cantidad"])
-
-            if st.button("Guardar Cambios de Stock"):
-                modificar_stock(prod_a_editar, nueva_cant_stock)
-                st.success(f"Stock de '{prod_a_editar}' modificado correctamente.")
-                st.rerun()
-
-    # --- PESTAÑA 3: ALTA DE MATERIAL ---
-    with tab_nuevo:
-        st.subheader("Dar de Alta un Componente Nuevo")
-        with st.form("form_alta_material", clear_on_submit=True):
-            nuevo_nombre = st.text_input("Nombre del Componente:")
-            nueva_categoria = st.text_input("Categoría:")
-            cant_inicial = st.number_input("Cantidad Inicial:", min_value=1, value=5)
-            min_alerta = st.number_input("Stock Mínimo para Alerta:", min_value=1, value=2)
-
-            btn_crear_mat = st.form_submit_button("Guardar Componente")
-
-            if btn_crear_mat:
-                if nuevo_nombre.strip() and nueva_categoria.strip():
-                    crear_material(
-                        nuevo_nombre.strip(), 
-                        nueva_categoria.strip().capitalize(), 
-                        cant_inicial, 
-                        min_alerta
-                    )
-                    st.success(f"¡Componente '{nuevo_nombre}' agregado al catálogo con éxito!")
-                    st.rerun()
-                else:
-                    st.error("Por favor completa el nombre y la categoría.")
+            for _, item in items_cat.iterrows():
+                col_info, col_stock_metric = st.columns([3, 1])
+                
+                with col_info:
+                    st.markdown(f"### {item['nombre']}")
+                    st.write(f"📝 {item['descripcion']}")
+                    st.caption(f"📍 **Ubicación en Pañol:** {item['ubicacion']}")
+                
+                with col_stock_metric:
+                    # Formato de stock visual según cantidad
+                    if item['stock'] > 3:
+                        st.metric(label="Stock Disponible", value=f"{item['stock']} unidades")
+                    elif item['stock'] > 0:
+                        st.metric(label="⚠️ Poco Stock", value=f"{item['stock']} unidades")
+                    else:
+                        st.metric(label="❌ Sin Stock", value="0 unidades")
+                
+                # Acciones exclusivas para profesores
+                if st.session_state["rol"] == "Profesor":
+                    c1, c2 = st.columns(2)
+                    with c1:
+                        st.button(f"✏️ Editar {item['nombre']}", key=f"edit_{item['id']}")
+                    with c2:
+                        st.button(f"➕ Modificar Stock", key=f"stock_{item['id']}")
+                
+                st.divider()
