@@ -1,345 +1,835 @@
-import streamlit as st
-import pandas as pd
+import os
+from datetime import datetime
+from pathlib import Path
 
-# 1. Configuración de la página
+
+import streamlit as st
+from dotenv import load_dotenv
+from supabase import create_client
+
+
+# ------------------------------------------------------------
+# CONFIGURACION Y CONEXION
+# ------------------------------------------------------------
+load_dotenv()
+
+
 st.set_page_config(
-    page_title="Materiales Mecatrónica - ORT",
-    layout="wide"
+    page_title="Pañol de Mecatrónica | ORT",
+    page_icon="⚙️",
+    layout="wide",
+    initial_sidebar_state="expanded",
 )
 
-# 2. CSS Personalizado
+
+SUPABASE_URL = os.getenv("SUPABASE_URL")
+SUPABASE_KEY = os.getenv("SUPABASE_PUBLISHABLE_KEY") or os.getenv("SUPABASE_ANON_KEY")
+SUPABASE_SECRET_KEY = os.getenv("SUPABASE_SECRET_KEY")
+CLAVE_MAESTRA_ADMIN = os.getenv("CLAVE_MAESTRA_ADMIN")
+
+
+def crear_cliente():
+    if not SUPABASE_URL or not SUPABASE_KEY:
+        return None
+    return create_client(SUPABASE_URL, SUPABASE_KEY)
+
+
+def crear_cliente_admin():
+    if not SUPABASE_URL or not SUPABASE_SECRET_KEY:
+        return None
+
+
+    return create_client(SUPABASE_URL, SUPABASE_SECRET_KEY)
+
+
+# Un cliente por sesión de Streamlit: evita compartir la sesión Auth
+# de un alumno/profesor con otro usuario.
+if "supabase_client" not in st.session_state:
+    st.session_state["supabase_client"] = crear_cliente()
+supabase = st.session_state["supabase_client"]
+
+
+# ------------------------------------------------------------
+# ESTILO VISUAL - inspirado en interfaces limpias tipo Apple
+# ------------------------------------------------------------
 st.markdown("""
-    <style>
-    .main-title {
-        font-size: 2.8rem;
-        font-weight: 800;
-        color: #002B66;
-        margin-bottom: 0px;
-        line-height: 1.1;
-    }
-    .sub-title {
-        font-size: 1.1rem;
-        color: #666;
-        margin-top: 5px;
-        margin-bottom: 20px;
-    }
-    </style>
+<style>
+@import url('https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800&display=swap');
+html, body, [class*="css"] { font-family: 'Inter', -apple-system, BlinkMacSystemFont, sans-serif; }
+.stApp { background: #f5f5f7; color: #1d1d1f; }
+[data-testid="stHeader"] { background: rgba(245,245,247,.82); }
+.block-container { max-width: 1220px; padding-top: 2rem; padding-bottom: 4rem; }
+section[data-testid="stSidebar"] { background: #ffffff; border-right: 1px solid #e8e8ed; }
+.hero {
+    background: linear-gradient(125deg, #111827 0%, #172554 55%, #2563eb 100%);
+    padding: 2.2rem 2.4rem; border-radius: 25px; color: white;
+    box-shadow: 0 16px 40px rgba(20,40,90,.14); margin-bottom: 1.5rem;
+}
+.hero-kicker { color: #bfdbfe; font-size: .78rem; letter-spacing: .14em; font-weight: 700; text-transform: uppercase; }
+.hero h1 { color: white; font-size: clamp(2rem, 4vw, 3rem); line-height: 1.08; margin: .5rem 0; font-weight: 800; }
+.hero p { color: #dbeafe; font-size: 1rem; margin: .4rem 0 0 0; }
+.eyebrow { color: #6e6e73; font-size: .76rem; font-weight: 700; letter-spacing: .11em; text-transform: uppercase; }
+.section-title { color: #1d1d1f; font-size: 1.55rem; font-weight: 750; margin: .1rem 0 .2rem 0; }
+.muted { color: #6e6e73; }
+div[data-testid="stMetric"] {
+    background: white; border: 1px solid #e8e8ed; border-radius: 18px;
+    padding: 1rem 1.1rem; box-shadow: 0 4px 16px rgba(0,0,0,.025);
+}
+div[data-testid="stMetricLabel"] { color: #6e6e73; }
+div[data-testid="stMetricValue"] { color: #1d1d1f; font-weight: 750; }
+div.stButton > button, div[data-testid="stFormSubmitButton"] > button {
+    border-radius: 12px; font-weight: 650; min-height: 2.7rem;
+}
+div[data-testid="stTabs"] button { font-weight: 650; }
+div[data-testid="stExpander"] { background: white; border: 1px solid #e8e8ed; border-radius: 16px; }
+div[data-testid="stForm"] { background: white; border: 1px solid #e8e8ed; border-radius: 18px; padding: 1.2rem; }
+div[data-testid="stAlert"] { border-radius: 14px; }
+.small-note { color: #86868b; font-size: .82rem; }
+hr { border-color: #e8e8ed; }
+</style>
 """, unsafe_allow_html=True)
 
-# ---------------------------------------------------------
-# INICIALIZACIÓN DE DATOS Y ESTADO DE LA APP
-# ---------------------------------------------------------
-if "inventario" not in st.session_state:
-    st.session_state["inventario"] = [
-        {"id": 1, "nombre": "Arduino UNO Rev3", "categoria": "Microcontroladores", "stock": 15, "ubicacion": "Caja A1", "descripcion": "Placa de desarrollo ATmega328P"},
-        {"id": 2, "nombre": "ESP32 NodeMCU", "categoria": "Microcontroladores", "stock": 8, "ubicacion": "Caja A2", "descripcion": "Módulo Wi-Fi y Bluetooth dual core"},
-        {"id": 3, "nombre": "Servomotor SG90 9g", "categoria": "Actuadores y Motores", "stock": 2, "ubicacion": "Caja B1", "descripcion": "Servomotor de torque 1.8 kg/cm"},
-        {"id": 4, "nombre": "Motor Paso a Paso NEMA 17", "categoria": "Actuadores y Motores", "stock": 6, "ubicacion": "Caja B3", "descripcion": "Motor stepper para impresión 3D / CNC"},
-        {"id": 5, "nombre": "Sensor Ultrasónico HC-SR04", "categoria": "Sensores", "stock": 20, "ubicacion": "Caja C1", "descripcion": "Medidor de distancia por ultrasonido"},
-        {"id": 6, "nombre": "Sensor de Temperatura DHT11", "categoria": "Sensores", "stock": 0, "ubicacion": "Caja C2", "descripcion": "Sensor digital de humedad y temperatura"},
-    ]
 
-if "pedidos" not in st.session_state:
-    st.session_state["pedidos"] = []
 
-if "rol" not in st.session_state:
-    st.session_state["rol"] = "Alumno"
 
-if "profesor_autenticado" not in st.session_state:
-    st.session_state["profesor_autenticado"] = False
+def mostrar_encabezado(subtitulo="Gestión inteligente de materiales y componentes"):
+    logo = Path(__file__).parent / "logo_ort.png"
+    c1, c2 = st.columns([1, 5], vertical_alignment="center")
+    with c1:
+        if logo.exists():
+            st.image(str(logo), width=130)
+        else:
+            st.markdown("## ⚙️ ORT")
+    with c2:
+        st.markdown(
+            f"""<div class="hero">
+            <div class="hero-kicker">Escuela ORT · Mecatrónica</div>
+            <h1>Pañol de materiales</h1>
+            <p>{subtitulo}</p>
+            </div>""",
+            unsafe_allow_html=True,
+        )
 
-# ---------------------------------------------------------
-# ENCABEZADO CON LOGO ANTES DEL TÍTULO
-# ---------------------------------------------------------
-col_logo, col_header = st.columns([1, 3])
 
-with col_logo:
+
+
+def error_db(exc, accion="realizar la operación"):
+    st.error(f"No se pudo {accion}.")
+    with st.expander("Ver detalle técnico"):
+        st.code(str(exc))
+
+
+
+
+def consultar_uno(tabla, columnas, columna, valor):
+    respuesta = supabase.table(tabla).select(columnas).eq(columna, valor).limit(1).execute()
+    return respuesta.data[0] if respuesta.data else None
+
+
+
+
+def obtener_perfil(user_id):
+    usuario = consultar_uno("usuarios", "id,nombre,apellido,email", "id", user_id)
+    alumno = consultar_uno("alumnos", "id,curso", "usuario_id", user_id)
+    profesor = consultar_uno("profesores", "id,materia", "usuario_id", user_id)
+    if profesor:
+        return {"rol": "profesor", "usuario": usuario or {}, "perfil": profesor}
+    if alumno:
+        return {"rol": "alumno", "usuario": usuario or {}, "perfil": alumno}
+    return None
+
+
+def registrar_usuario(rol, nombre, apellido, email, password, dato_extra):
+    email = email.strip().lower()
+
+
+    if rol == "alumno":
+        # Registro público normal: Supabase crea la cuenta.
+        # El trigger SQL crea automáticamente usuarios y alumnos.
+        resultado = supabase.auth.sign_up({
+            "email": email,
+            "password": password,
+            "options": {
+                "data": {
+                    "nombre": nombre.strip(),
+                    "apellido": apellido.strip(),
+                    "curso": dato_extra.strip(),
+                }
+            }
+        })
+
+
+    elif rol == "profesor":
+        # Registro administrativo: requiere la clave secreta del servidor.
+        cliente_admin = crear_cliente_admin()
+
+
+        if cliente_admin is None:
+            raise Exception(
+                "Falta configurar SUPABASE_SECRET_KEY en el archivo .env."
+            )
+
+
+        resultado = cliente_admin.auth.admin.create_user({
+            "email": email,
+            "password": password,
+            "user_metadata": {
+                "nombre": nombre.strip(),
+                "apellido": apellido.strip(),
+                "materia": dato_extra.strip(),
+            },
+            "app_metadata": {
+                "rol": "profesor"
+            }
+        })
+
+
+    else:
+        raise Exception("Rol de usuario no válido.")
+
+
+    return resultado
+
+
+def cerrar_sesion():
     try:
-        st.image("logo_ort.png", width=220)
-    except:
-        st.write("(Logo ORT)")
+        supabase.auth.sign_out()
+    except Exception:
+        pass
+    for key in ("user", "perfil"):
+        st.session_state.pop(key, None)
+    st.rerun()
 
-with col_header:
-    st.markdown("<h1 class='main-title'>Materiales Mecatrónica</h1>", unsafe_allow_html=True)
-    st.markdown("<p class='sub-title'>Pañol de Mecatrónica • Escuela ORT</p>", unsafe_allow_html=True)
 
-st.divider()
 
-# ---------------------------------------------------------
-# SELECCIÓN DE ROL
-# ---------------------------------------------------------
-st.subheader("Seleccioná tu perfil")
 
-col_alumno, col_profesor = st.columns(2)
-
-with col_alumno:
-    btn_alumno = st.button(
-        "ALUMNO",
-        use_container_width=True,
-        type="primary" if st.session_state["rol"] == "Alumno" else "secondary"
+def iniciar_sesion():
+    mostrar_encabezado(
+        "Ingresá o creá tu cuenta para consultar y administrar el pañol."
     )
-    if btn_alumno:
-        st.session_state["rol"] = "Alumno"
-        st.rerun()
 
-with col_profesor:
-    btn_profesor = st.button(
-        "PROFESOR",
-        use_container_width=True,
-        type="primary" if st.session_state["rol"] == "Profesor" else "secondary"
+
+    _, centro, _ = st.columns([1, 1.4, 1])
+
+
+    with centro:
+        tab_login, tab_registro = st.tabs([
+            "Iniciar sesión",
+            "Crear cuenta"
+        ])
+
+
+        # ------------------------------------------------
+        # INICIAR SESIÓN
+        # ------------------------------------------------
+        with tab_login:
+            st.markdown(
+                '<div class="section-title">Bienvenido</div>',
+                unsafe_allow_html=True
+            )
+            st.write("Usá tu correo y contraseña para continuar.")
+
+
+            with st.form("login_form"):
+                email = st.text_input(
+                    "Correo electrónico",
+                    placeholder="nombre@ort.edu.ar"
+                )
+                password = st.text_input(
+                    "Contraseña",
+                    type="password"
+                )
+
+
+                entrar = st.form_submit_button(
+                    "Iniciar sesión",
+                    type="primary",
+                    use_container_width=True
+                )
+
+
+            if entrar:
+                if not email.strip() or not password:
+                    st.warning("Completá el correo y la contraseña.")
+                else:
+                    try:
+                        result = supabase.auth.sign_in_with_password({
+                            "email": email.strip(),
+                            "password": password
+                        })
+
+
+                        user = result.user
+                        perfil = obtener_perfil(user.id)
+
+
+                        if not perfil:
+                            supabase.auth.sign_out()
+                            st.error(
+                                "La cuenta inició sesión, pero no está "
+                                "vinculada a un alumno o profesor."
+                            )
+                        else:
+                            st.session_state["user"] = {
+                                "id": user.id,
+                                "email": user.email
+                            }
+                            st.session_state["perfil"] = perfil
+                            st.rerun()
+
+
+                    except Exception as exc:
+                        st.error(
+                            "No se pudo iniciar sesión. "
+                            "Revisá el correo y la contraseña."
+                        )
+                        with st.expander("Detalle técnico"):
+                            st.code(str(exc))
+
+
+        # ------------------------------------------------
+        # REGISTRARSE
+        # ------------------------------------------------
+        with tab_registro:
+            st.markdown(
+                '<div class="section-title">Crear una cuenta</div>',
+                unsafe_allow_html=True
+            )
+            st.write("Completá tus datos para registrarte.")
+
+
+            rol = st.radio(
+                "Tipo de cuenta",
+                ["Alumno", "Profesor"],
+                horizontal=True,
+                key="tipo_registro"
+            )
+
+
+            es_profesor = rol == "Profesor"
+
+
+            with st.form("registro_form"):
+                nombre = st.text_input("Nombre")
+                apellido = st.text_input("Apellido")
+
+
+                email_registro = st.text_input(
+                    "Correo electrónico",
+                    placeholder="nombre@ort.edu.ar"
+                )
+
+
+                if es_profesor:
+                    dato_extra = st.text_input(
+                        "Materia o área"
+                    )
+                    clave_admin = st.text_input(
+                        "Clave de registro de profesor",
+                        type="password"
+                    )
+                else:
+                    dato_extra = st.text_input(
+                        "Curso",
+                        placeholder="Ej. 6° Informática"
+                    )
+                    clave_admin = ""
+
+
+                password_registro = st.text_input(
+                    "Contraseña",
+                    type="password"
+                )
+
+
+                confirmar_password = st.text_input(
+                    "Confirmar contraseña",
+                    type="password"
+                )
+
+
+                registrar = st.form_submit_button(
+                    "Crear cuenta",
+                    type="primary",
+                    use_container_width=True
+                )
+
+
+            if registrar:
+                if not all([
+                    nombre.strip(),
+                    apellido.strip(),
+                    email_registro.strip(),
+                    dato_extra.strip(),
+                    password_registro,
+                    confirmar_password
+                ]):
+                    st.warning("Completá todos los campos.")
+
+
+                elif "@" not in email_registro:
+                    st.warning("Ingresá un correo electrónico válido.")
+
+
+                elif len(password_registro) < 8:
+                    st.warning(
+                        "La contraseña debe tener al menos 8 caracteres."
+                    )
+
+
+                elif password_registro != confirmar_password:
+                    st.error("Las contraseñas no coinciden.")
+
+
+                elif es_profesor and not CLAVE_MAESTRA_ADMIN:
+                    st.error(
+                        "No está configurada la clave administrativa "
+                        "en el servidor."
+                    )
+
+
+                elif es_profesor and clave_admin != CLAVE_MAESTRA_ADMIN:
+                    st.error("La clave de registro de profesor es incorrecta.")
+
+
+                else:
+                    try:
+                        registrar_usuario(
+                            rol="profesor" if es_profesor else "alumno",
+                            nombre=nombre,
+                            apellido=apellido,
+                            email=email_registro,
+                            password=password_registro,
+                            dato_extra=dato_extra
+                        )
+
+
+                        st.success(
+                            "¡Cuenta creada correctamente! "
+                            "Ahora podés iniciar sesión."
+                        )
+
+
+                        st.info(
+                            "Si Supabase tiene habilitada la confirmación "
+                            "por correo, primero revisá tu bandeja de entrada "
+                            "y confirmá tu dirección."
+                        )
+
+
+                    except Exception as exc:
+                        st.error(
+                            "No se pudo crear la cuenta. "
+                            "Revisá los datos o consultá el detalle técnico."
+                        )
+                        with st.expander("Detalle técnico"):
+                            st.code(str(exc))
+
+
+def cargar_inventario():
+    return (
+        supabase.table("componentes")
+        .select("id,nombre,descripcion,categoria_id,cantidad,stock_minimo,ubicacion,categorias(nombre)")
+        .order("nombre")
+        .execute()
+        .data
     )
-    if btn_profesor:
-        st.session_state["rol"] = "Profesor"
-        st.rerun()
 
-# VALIDACIÓN DE CONTRASEÑA DE PROFESOR
-if st.session_state["rol"] == "Profesor" and not st.session_state["profesor_autenticado"]:
-    st.warning("Acceso restringido para Profesores.")
-    with st.form("form_login_profesor"):
-        clave = st.text_input("Ingresá la contraseña:", type="password")
-        btn_ingresar = st.form_submit_button("Ingresar")
-        if btn_ingresar:
-            if clave == "admin123":
-                st.session_state["profesor_autenticado"] = True
-                st.success("Acceso concedido.")
-                st.rerun()
+
+
+
+def cargar_categorias():
+    return supabase.table("categorias").select("id,nombre").order("nombre").execute().data
+
+
+
+
+def nombre_categoria(item):
+    relacion = item.get("categorias")
+    if isinstance(relacion, dict):
+        return relacion.get("nombre", "Sin categoría")
+    if isinstance(relacion, list) and relacion:
+        return relacion[0].get("nombre", "Sin categoría")
+    return "Sin categoría"
+
+
+
+
+def cargar_pedidos_alumno(alumno_id):
+    return (
+        supabase.table("pedidos")
+        .select("id,fecha,estado_id,estados(nombre),pedido_detalle(cantidad,componentes(nombre))")
+        .eq("alumno_id", alumno_id)
+        .order("fecha", desc=True)
+        .execute()
+        .data
+    )
+
+
+
+
+def cargar_pedidos_profesor():
+    return (
+        supabase.table("pedidos")
+        .select("id,fecha,estado_id,alumno_id,profesor_id,estados(nombre),alumnos(curso,usuarios(nombre,apellido,email)),pedido_detalle(cantidad,componentes(nombre))")
+        .order("fecha", desc=True)
+        .execute()
+        .data
+    )
+
+
+
+
+def texto_detalle(pedido):
+    partes = []
+    for detalle in pedido.get("pedido_detalle", []) or []:
+        comp = detalle.get("componentes") or {}
+        if isinstance(comp, list):
+            comp = comp[0] if comp else {}
+        partes.append(f"{comp.get('nombre', 'Componente')} × {detalle.get('cantidad', 0)}")
+    return ", ".join(partes) or "Sin detalle"
+
+
+
+
+def estado_nombre(pedido):
+    estado = pedido.get("estados") or {}
+    if isinstance(estado, list):
+        estado = estado[0] if estado else {}
+    return estado.get("nombre", "sin estado").capitalize()
+
+
+
+
+def panel_alumno(perfil):
+    st.markdown('<div class="eyebrow">Área del alumno</div><div class="section-title">Tu espacio de materiales</div>', unsafe_allow_html=True)
+    nombre = f"{perfil['usuario'].get('nombre', '')} {perfil['usuario'].get('apellido', '')}".strip() or st.session_state["user"]["email"]
+    st.caption(f"{nombre} · Curso {perfil['perfil'].get('curso', 'No indicado')}")
+    try:
+        inventario = cargar_inventario()
+        categorias = cargar_categorias()
+        pedidos = cargar_pedidos_alumno(perfil["perfil"]["id"])
+    except Exception as exc:
+        error_db(exc, "cargar los datos desde Supabase")
+        return
+
+
+    total = len(inventario)
+    disponibles = sum(1 for x in inventario if (x.get("cantidad") or 0) > 0)
+    bajo_stock = sum(1 for x in inventario if (x.get("cantidad") or 0) <= (x.get("stock_minimo") or 0))
+    m1, m2, m3 = st.columns(3)
+    m1.metric("Componentes registrados", total)
+    m2.metric("Con disponibilidad", disponibles)
+    m3.metric("En nivel mínimo", bajo_stock)
+
+
+    tab_inv, tab_pedir, tab_mios = st.tabs(["  Inventario  ", "  Solicitar material  ", "  Mis solicitudes  "])
+
+
+    with tab_inv:
+        st.markdown("#### Explorar inventario")
+        c1, c2 = st.columns([2, 1])
+        busqueda = c1.text_input("Buscar", placeholder="Ej. Arduino, motor, sensor...")
+        opciones = ["Todas"] + [c["nombre"] for c in categorias]
+        cat = c2.selectbox("Categoría", opciones)
+        filtrados = inventario
+        if cat != "Todas":
+            categoria_id = next((c["id"] for c in categorias if c["nombre"] == cat), None)
+            filtrados = [x for x in filtrados if x.get("categoria_id") == categoria_id]
+        if busqueda:
+            filtrados = [x for x in filtrados if busqueda.casefold() in (x.get("nombre") or "").casefold() or busqueda.casefold() in (x.get("descripcion") or "").casefold()]
+        if not filtrados:
+            st.info("No hay componentes que coincidan con la búsqueda.")
+        else:
+            for item in filtrados:
+                cantidad = item.get("cantidad") or 0
+                minimo = item.get("stock_minimo") or 0
+                with st.container(border=True):
+                    a, b, c = st.columns([3, 1.3, 1.2], vertical_alignment="center")
+                    a.markdown(f"**{item['nombre']}**")
+                    a.caption(f"{item.get('descripcion') or 'Sin descripción'} · {nombre_categoria(item)}")
+                    a.caption(f"Ubicación: {item.get('ubicacion') or 'No asignada'}")
+                    b.metric("Disponibles", cantidad)
+                    if cantidad == 0:
+                        c.error("Sin stock")
+                    elif cantidad <= minimo:
+                        c.warning("Stock bajo")
+                    else:
+                        c.success("Disponible")
+
+
+    with tab_pedir:
+        st.markdown("#### Nueva solicitud")
+        disponibles_items = [x for x in inventario if (x.get("cantidad") or 0) > 0]
+        if not disponibles_items:
+            st.info("En este momento no hay materiales con stock.")
+        else:
+            opciones_material = {f"{x['nombre']} · {x.get('cantidad', 0)} disponibles": x for x in disponibles_items}
+            with st.form("crear_pedido_form"):
+                elegido = st.selectbox("Material", list(opciones_material.keys()))
+                material = opciones_material[elegido]
+                st.caption(f"Categoría: {nombre_categoria(material)} · Ubicación: {material.get('ubicacion') or 'No asignada'}")
+                cantidad = st.number_input("Cantidad solicitada", min_value=1, max_value=max(1, int(material.get("cantidad") or 1)), value=1, step=1)
+                motivo = st.text_area("¿Para qué clase o proyecto lo necesitás?", placeholder="Contanos brevemente el uso...")
+                enviar = st.form_submit_button("Enviar solicitud", type="primary", use_container_width=True)
+            if enviar:
+                try:
+                    supabase.rpc("crear_pedido", {
+                        "p_componente_id": material["id"],
+                        "p_cantidad": int(cantidad),
+                        "p_observaciones": motivo.strip() or None,
+                    }).execute()
+                    st.success("Solicitud registrada. Podés seguir su estado en «Mis solicitudes».")
+                    st.rerun()
+                except Exception as exc:
+                    error_db(exc, "crear la solicitud")
+                    st.caption("La función crear_pedido usa el usuario autenticado para identificar al alumno.")
+
+
+    with tab_mios:
+        st.markdown("#### Seguimiento")
+        if not pedidos:
+            st.info("Todavía no tenés solicitudes registradas.")
+        for pedido in pedidos:
+            estado = estado_nombre(pedido)
+            with st.container(border=True):
+                a, b = st.columns([3, 1])
+                a.markdown(f"**Solicitud #{pedido['id']}**")
+                a.write(texto_detalle(pedido))
+                a.caption(f"Fecha: {pedido.get('fecha', 'No disponible')}")
+                if estado == "Pendiente":
+                    b.warning(estado)
+                elif estado == "Rechazado":
+                    b.error(estado)
+                elif estado == "Entregado":
+                    b.success(estado)
+                else:
+                    b.info(estado)
+
+
+
+
+def panel_profesor(perfil):
+    st.markdown('<div class="eyebrow">Administración</div><div class="section-title">Panel del pañol</div>', unsafe_allow_html=True)
+    nombre = f"{perfil['usuario'].get('nombre', '')} {perfil['usuario'].get('apellido', '')}".strip()
+    st.caption(f"{nombre or st.session_state['user']['email']} · Profesor")
+    try:
+        inventario = cargar_inventario()
+        categorias = cargar_categorias()
+        pedidos = cargar_pedidos_profesor()
+        estados = supabase.table("estados").select("id,nombre").execute().data
+    except Exception as exc:
+        error_db(exc, "cargar los datos administrativos")
+        return
+
+
+    pendientes = sum(1 for p in pedidos if estado_nombre(p).lower() == "pendiente")
+    bajo_stock = sum(1 for x in inventario if (x.get("cantidad") or 0) <= (x.get("stock_minimo") or 0))
+    m1, m2, m3 = st.columns(3)
+    m1.metric("Componentes", len(inventario))
+    m2.metric("Solicitudes pendientes", pendientes)
+    m3.metric("Alertas de stock", bajo_stock)
+
+
+    tab_ped, tab_inv, tab_nuevo, tab_cat = st.tabs(["  Solicitudes  ", "  Inventario  ", "  Agregar componente  ", "  Categorías  "])
+
+
+    with tab_ped:
+        st.markdown("#### Solicitudes de alumnos")
+        if not pedidos:
+            st.info("Todavía no hay solicitudes.")
+        for pedido in pedidos:
+            estado = estado_nombre(pedido)
+            alumno = pedido.get("alumnos") or {}
+            if isinstance(alumno, list):
+                alumno = alumno[0] if alumno else {}
+            usuario = alumno.get("usuarios") or {}
+            if isinstance(usuario, list):
+                usuario = usuario[0] if usuario else {}
+            alumno_nombre = f"{usuario.get('nombre', '')} {usuario.get('apellido', '')}".strip() or usuario.get("email", "Alumno")
+            with st.container(border=True):
+                top, status = st.columns([4, 1])
+                top.markdown(f"**Solicitud #{pedido['id']} · {texto_detalle(pedido)}**")
+                top.caption(f"{alumno_nombre} · Curso {alumno.get('curso', 'No indicado')} · {pedido.get('fecha', '')}")
+                if estado == "Pendiente":
+                    status.warning(estado)
+                elif estado == "Rechazado":
+                    status.error(estado)
+                elif estado == "Entregado":
+                    status.success(estado)
+                else:
+                    status.info(estado)
+                if estado.lower() in ("pendiente", "en proceso", "aprobado"):
+                    disponibles_estados = [e for e in estados if e["nombre"] in ("en proceso", "aprobado", "rechazado", "entregado")]
+                    etiquetas = {e["nombre"].capitalize(): e["nombre"] for e in disponibles_estados}
+                    c1, c2 = st.columns([2, 1])
+                    nuevo_estado = c1.selectbox("Actualizar estado", list(etiquetas.keys()), key=f"estado_{pedido['id']}")
+                    if c2.button("Guardar estado", key=f"guardar_estado_{pedido['id']}", type="primary", use_container_width=True):
+                        try:
+                            supabase.rpc("actualizar_estado_pedido", {
+                                "p_pedido_id": pedido["id"],
+                                "p_nuevo_estado": etiquetas[nuevo_estado].lower(),
+                            }).execute()
+                            st.success(f"Solicitud #{pedido['id']} actualizada.")
+                            st.rerun()
+                        except Exception as exc:
+                            error_db(exc, "actualizar el estado")
+                            st.caption("La entrega descuenta el stock desde Supabase. No se descuenta al crear ni al aprobar el pedido.")
+
+
+    with tab_inv:
+        st.markdown("#### Editar inventario")
+        for item in inventario:
+            with st.expander(f"{item['nombre']} · {item.get('cantidad', 0)} unidades"):
+                with st.form(f"editar_{item['id']}"):
+                    c1, c2 = st.columns(2)
+                    nombre = c1.text_input("Nombre", value=item["nombre"])
+                    categoria_actual = next((c["id"] for c in categorias if c["id"] == item.get("categoria_id")), categorias[0]["id"] if categorias else None)
+                    categoria_nombres = {c["nombre"]: c["id"] for c in categorias}
+                    categoria_nombre_actual = next((n for n, cid in categoria_nombres.items() if cid == categoria_actual), None)
+                    cat_opciones = list(categoria_nombres.keys())
+                    cat_idx = cat_opciones.index(categoria_nombre_actual) if categoria_nombre_actual in cat_opciones else 0
+                    cat_nombre = c1.selectbox("Categoría", cat_opciones, index=cat_idx) if cat_opciones else None
+                    cantidad = c2.number_input("Cantidad actual", min_value=0, value=int(item.get("cantidad") or 0), step=1)
+                    minimo = c2.number_input("Stock mínimo", min_value=0, value=int(item.get("stock_minimo") or 0), step=1)
+                    ubicacion = c1.text_input("Ubicación", value=item.get("ubicacion") or "")
+                    descripcion = c2.text_area("Descripción", value=item.get("descripcion") or "")
+                    guardar = st.form_submit_button("Guardar cambios", type="primary")
+                if guardar:
+                    if not nombre.strip():
+                        st.error("El nombre no puede estar vacío.")
+                    elif cantidad < 0 or minimo < 0:
+                        st.error("Las cantidades no pueden ser negativas.")
+                    else:
+                        try:
+                            supabase.table("componentes").update({
+                                "nombre": nombre.strip(),
+                                "categoria_id": categoria_nombres.get(cat_nombre) if cat_nombre else None,
+                                "cantidad": int(cantidad),
+                                "stock_minimo": int(minimo),
+                                "ubicacion": ubicacion.strip() or None,
+                                "descripcion": descripcion.strip() or None,
+                            }).eq("id", item["id"]).execute()
+                            st.success("Componente actualizado en Supabase.")
+                            st.rerun()
+                        except Exception as exc:
+                            error_db(exc, "guardar los cambios")
+
+
+    with tab_nuevo:
+        st.markdown("#### Incorporar un componente")
+        if not categorias:
+            st.warning("Primero creá una categoría.")
+        else:
+            with st.form("nuevo_componente"):
+                nombre = st.text_input("Nombre del componente")
+                cat = st.selectbox("Categoría", {c["nombre"]: c["id"] for c in categorias}.keys())
+                c1, c2 = st.columns(2)
+                cantidad = c1.number_input("Cantidad inicial", min_value=0, value=1, step=1)
+                minimo = c2.number_input("Stock mínimo", min_value=0, value=1, step=1)
+                ubicacion = st.text_input("Ubicación", placeholder="Ej. Cajón A1")
+                descripcion = st.text_area("Descripción")
+                crear = st.form_submit_button("Agregar al inventario", type="primary", use_container_width=True)
+            if crear:
+                if not nombre.strip():
+                    st.error("Ingresá el nombre del componente.")
+                else:
+                    try:
+                        cat_id = next(c["id"] for c in categorias if c["nombre"] == cat)
+                        supabase.table("componentes").insert({
+                            "nombre": nombre.strip(),
+                            "descripcion": descripcion.strip() or None,
+                            "categoria_id": cat_id,
+                            "cantidad": int(cantidad),
+                            "stock_minimo": int(minimo),
+                            "ubicacion": ubicacion.strip() or None,
+                        }).execute()
+                        st.success("Componente agregado correctamente.")
+                        st.rerun()
+                    except Exception as exc:
+                        error_db(exc, "agregar el componente")
+
+
+    with tab_cat:
+        st.markdown("#### Administrar categorías")
+        for categoria in categorias:
+            st.write(f"• {categoria['nombre']}")
+        with st.form("nueva_categoria"):
+            nueva = st.text_input("Nombre de la nueva categoría")
+            descripcion_cat = st.text_input("Descripción (opcional)")
+            agregar = st.form_submit_button("Crear categoría", type="primary")
+        if agregar:
+            if not nueva.strip():
+                st.warning("Escribí un nombre para la categoría.")
             else:
-                st.error("Contraseña incorrecta. Intentalo de nuevo.")
+                try:
+                    supabase.table("categorias").insert({
+                        "nombre": nueva.strip(),
+                        "descripcion": descripcion_cat.strip() or None,
+                    }).execute()
+                    st.success("Categoría creada.")
+                    st.rerun()
+                except Exception as exc:
+                    error_db(exc, "crear la categoría")
+
+
+
+
+# ------------------------------------------------------------
+# INICIO
+# ------------------------------------------------------------
+if supabase is None:
+    mostrar_encabezado()
+    st.error("Falta configurar la conexión con Supabase.")
+    st.markdown("Creá un archivo **.env** en la carpeta del proyecto con estas variables:")
+    st.code("SUPABASE_URL=https://TU-PROYECTO.supabase.co\nSUPABASE_PUBLISHABLE_KEY=TU_CLAVE_PUBLICABLE")
     st.stop()
 
-# Información de perfil activo
-col_status, col_logout = st.columns([4, 1])
-with col_status:
-    st.caption(f"Perfil activo: **{st.session_state['rol']}**")
-with col_logout:
-    if st.session_state["rol"] == "Profesor" and st.session_state["profesor_autenticado"]:
-        if st.button("Cerrar Sesión", type="secondary"):
-            st.session_state["profesor_autenticado"] = False
-            st.session_state["rol"] = "Alumno"
-            st.rerun()
 
-st.divider()
+if "user" not in st.session_state:
+    iniciar_sesion()
+    st.stop()
 
-# ---------------------------------------------------------
-# SECCIÓN: ALUMNO
-# ---------------------------------------------------------
-if st.session_state["rol"] == "Alumno":
-    tab1, tab2, tab3 = st.tabs(["Materiales", "Pedir Material", "Mis Pedidos"])
 
-    df_inventario = pd.DataFrame(st.session_state["inventario"])
+# Confirmar que el perfil todavía corresponde al usuario autenticado.
+if "perfil" not in st.session_state:
+    try:
+        st.session_state["perfil"] = obtener_perfil(st.session_state["user"]["id"])
+    except Exception:
+        st.session_state["perfil"] = None
 
-    # TAB 1: CONSULTAR MATERIALES
-    with tab1:
-        st.subheader("Buscador de Componentes")
-        col_search, col_cat = st.columns([3, 2])
-        
-        with col_search:
-            busqueda = st.text_input("Buscar componente por nombre:", placeholder="Ej. Arduino, Sensor, Servo...")
-        with col_cat:
-            cat_options = ["Todas"] + list(df_inventario["categoria"].unique())
-            categoria_sel = st.selectbox("Filtrar por categoría:", cat_options)
 
-        df_filtrado = df_inventario.copy()
+if not st.session_state.get("perfil"):
+    st.warning("Tu usuario no está asociado a un registro de alumno o profesor.")
+    if st.button("Cerrar sesión"):
+        cerrar_sesion()
+    st.stop()
 
-        if categoria_sel != "Todas":
-            df_filtrado = df_filtrado[df_filtrado["categoria"] == categoria_sel]
-        if busqueda:
-            df_filtrado = df_filtrado[
-                df_filtrado["nombre"].str.contains(busqueda, case=False) | 
-                df_filtrado["descripcion"].str.contains(busqueda, case=False)
-            ]
 
-        if df_filtrado.empty:
-            st.warning("No se encontraron componentes con ese criterio.")
-        else:
-            for cat in df_filtrado["categoria"].unique():
-                with st.expander(f"Categoría: {cat}", expanded=True):
-                    items = df_filtrado[df_filtrado["categoria"] == cat]
-                    for _, item in items.iterrows():
-                        c_info, c_stock = st.columns([3, 1])
-                        with c_info:
-                            st.markdown(f"### {item['nombre']}")
-                            st.write(f"Descripción: {item['descripcion']}")
-                            st.caption(f"Ubicación en Pañol: {item['ubicacion']}")
-                        with c_stock:
-                            if item['stock'] > 3:
-                                st.metric("Stock Disponible", f"{item['stock']} un.")
-                            elif item['stock'] > 0:
-                                st.metric("Poco Stock", f"{item['stock']} un.")
-                            else:
-                                st.metric("Sin Stock", "0 un.")
-                        st.divider()
+perfil = st.session_state["perfil"]
+with st.sidebar:
+    st.markdown("## ⚙️ Pañol ORT")
+    st.caption("Mecatrónica")
+    st.divider()
+    st.markdown(f"**{perfil['usuario'].get('nombre', '')} {perfil['usuario'].get('apellido', '')}**")
+    st.caption(st.session_state["user"]["email"])
+    st.info("Perfil de profesor" if perfil["rol"] == "profesor" else f"Alumno · {perfil['perfil'].get('curso', '')}")
+    if st.button("Cerrar sesión", use_container_width=True):
+        cerrar_sesion()
+    st.markdown("---")
+    st.caption("Inventario centralizado en Supabase")
 
-    # TAB 2: PEDIR MATERIAL
-    with tab2:
-        st.subheader("Solicitud de Material para Clases / Proyectos")
-        
-        # Filtrar materiales con stock mayor a 0
-        materiales_disponibles = [item for item in st.session_state["inventario"] if item["stock"] > 0]
-        nombres_materiales = [item["nombre"] for item in materiales_disponibles]
 
-        with st.form("form_pedido_alumno"):
-            alumno_nombre = st.text_input("Nombre y Apellido del Alumno:")
-            
-            # Selector de cursos requeridos
-            alumno_curso = st.selectbox("Curso / División:", ["3A", "3B", "4A", "4B", "4C", "5A", "5B"])
-            
-            if nombres_materiales:
-                material_sel_nombre = st.selectbox("¿Qué material pedís?:", nombres_materiales)
-                
-                # Obtener stock actual del material seleccionado
-                item_seleccionado = next((i for i in st.session_state["inventario"] if i["nombre"] == material_sel_nombre), None)
-                stock_disponible = item_seleccionado["stock"] if item_seleccionado else 0
-                
-                st.caption(f"Stock disponible actualmente: **{stock_disponible} unidades**.")
-                cantidad = st.number_input("Cantidad requerida:", min_value=1, max_value=max(1, stock_disponible), value=1)
-            else:
-                material_sel_nombre = None
-                stock_disponible = 0
-                st.warning("No hay materiales con stock disponible en este momento.")
-                cantidad = 1
+mostrar_encabezado("Un espacio simple y ordenado para consultar, solicitar y administrar materiales.")
+try:
+    if perfil["rol"] == "alumno":
+        panel_alumno(perfil)
+    else:
+        panel_profesor(perfil)
+except Exception as exc:
+    error_db(exc, "mostrar la aplicación")
 
-            observaciones = st.text_area("Motivo del pedido / Proyecto:")
-            btn_enviar_pedido = st.form_submit_button("Enviar Solicitud")
 
-            if btn_enviar_pedido:
-                if not alumno_nombre.strip():
-                    st.error("Por favor completá tu Nombre y Apellido.")
-                elif not material_sel_nombre:
-                    st.error("No hay un material seleccionado.")
-                elif cantidad > stock_disponible:
-                    st.error(f"No podés pedir más de lo disponible. El stock actual es de {stock_disponible} unidades.")
-                else:
-                    # Reservar y descontar stock inmediatamente
-                    item_seleccionado["stock"] -= cantidad
 
-                    nuevo_pedido = {
-                        "id": len(st.session_state["pedidos"]) + 1,
-                        "alumno": alumno_nombre,
-                        "curso": alumno_curso,
-                        "material": material_sel_nombre,
-                        "cantidad": cantidad,
-                        "observaciones": observaciones,
-                        "estado": "Pendiente"
-                    }
-                    st.session_state["pedidos"].append(nuevo_pedido)
-                    st.success("Solicitud enviada con éxito. El stock ha sido reservado a la espera de la confirmación del Profesor.")
-                    st.rerun()
 
-    # TAB 3: MIS PEDIDOS
-    with tab3:
-        st.subheader("Estado de tus Solicitudes")
-        if not st.session_state["pedidos"]:
-            st.info("Aún no realizaste ningún pedido.")
-        else:
-            for p in reversed(st.session_state["pedidos"]):
-                with st.container():
-                    c_det, c_est = st.columns([3, 1])
-                    with c_det:
-                        st.markdown(f"### Pedido #{p['id']}: {p['material']} ({p['cantidad']} un.)")
-                        st.write(f"Alumno: {p['alumno']} | Curso: {p['curso']}")
-                        if p["observaciones"]:
-                            st.caption(f"Motivo: {p['observaciones']}")
-                    with c_est:
-                        if p["estado"] == "Pendiente":
-                            st.warning("Pendiente")
-                        elif p["estado"] == "Aceptado":
-                            st.success("Aceptado")
-                        else:
-                            st.error("Rechazado")
-                    st.divider()
 
-# ---------------------------------------------------------
-# SECCIÓN: PROFESOR
-# ---------------------------------------------------------
-elif st.session_state["rol"] == "Profesor":
-    tab_pedidos, tab_modificar, tab_nuevo = st.tabs(["Pedidos de Alumnos", "Modificar Materiales y Stock", "Agregar Material"])
-
-    # TAB 1: PEDIDOS DE ALUMNOS (ACEPTAR / RECHAZAR)
-    with tab_pedidos:
-        st.subheader("Solicitudes de Materiales Recibidas")
-        pedidos_pendientes = [p for p in st.session_state["pedidos"] if p["estado"] == "Pendiente"]
-        
-        if not pedidos_pendientes:
-            st.info("No hay pedidos pendientes de revisión.")
-        else:
-            for p in pedidos_pendientes:
-                with st.container():
-                    st.markdown(f"### Solicitud #{p['id']}: {p['material']} ({p['cantidad']} un.)")
-                    st.write(f"Alumno: {p['alumno']} | Curso: {p['curso']}")
-                    if p["observaciones"]:
-                        st.write(f"Motivo: {p['observaciones']}")
-                    
-                    c_aprobar, c_rechazar = st.columns(2)
-                    
-                    with c_aprobar:
-                        if st.button(f"Aceptar Pedido #{p['id']}", key=f"btn_ok_{p['id']}", type="primary"):
-                            p["estado"] = "Aceptado"
-                            # El stock ya fue descontado al momento de pedir
-                            st.success(f"Pedido #{p['id']} aceptado correctamente.")
-                            st.rerun()
-
-                    with c_rechazar:
-                        if st.button(f"Rechazar Pedido #{p['id']}", key=f"btn_no_{p['id']}"):
-                            p["estado"] = "Rechazado"
-                            # Devolver las unidades al stock disponible
-                            for item in st.session_state["inventario"]:
-                                if item["nombre"] == p["material"]:
-                                    item["stock"] += p["cantidad"]
-                            st.error(f"Pedido #{p['id']} rechazado. Se devolvieron {p['cantidad']} unidades al stock.")
-                            st.rerun()
-                    st.divider()
-
-    # TAB 2: MODIFICAR MATERIALES Y STOCK
-    with tab_modificar:
-        st.subheader("Modificar Inventario y Ajustar Stock")
-        
-        for idx, item in enumerate(st.session_state["inventario"]):
-            with st.expander(f"{item['nombre']} — Stock actual: {item['stock']} un."):
-                col_e1, col_e2 = st.columns(2)
-                
-                with col_e1:
-                    nuevo_nombre = st.text_input("Nombre del Componente:", value=item["nombre"], key=f"p_nom_{item['id']}")
-                    nueva_cat = st.text_input("Categoría:", value=item["categoria"], key=f"p_cat_{item['id']}")
-                    nueva_ubicacion = st.text_input("Ubicación en Pañol:", value=item["ubicacion"], key=f"p_ubic_{item['id']}")
-                
-                with col_e2:
-                    nuevo_stock = st.number_input("Stock (Unidades):", min_value=0, value=int(item["stock"]), key=f"p_stk_{item['id']}")
-                    nueva_desc = st.text_area("Descripción:", value=item["descripcion"], key=f"p_desc_{item['id']}")
-
-                if st.button(f"Guardar Cambios", key=f"p_save_{item['id']}"):
-                    st.session_state["inventario"][idx]["nombre"] = nuevo_nombre
-                    st.session_state["inventario"][idx]["categoria"] = nueva_cat
-                    st.session_state["inventario"][idx]["ubicacion"] = nueva_ubicacion
-                    st.session_state["inventario"][idx]["stock"] = nuevo_stock
-                    st.session_state["inventario"][idx]["descripcion"] = nueva_desc
-                    st.success(f"Cambios guardados en {nuevo_nombre}.")
-                    st.rerun()
-
-    # TAB 3: AGREGAR NUEVO MATERIAL
-    with tab_nuevo:
-        st.subheader("Agregar Nuevo Componente al Pañol")
-        with st.form("form_nuevo_componente"):
-            item_nom = st.text_input("Nombre del Componente:")
-            item_cat = st.text_input("Categoría (ej. Sensores, Microcontroladores, Herramientas):")
-            item_stk = st.number_input("Stock Inicial:", min_value=0, value=1)
-            item_ubic = st.text_input("Ubicación en Pañol (ej. Caja D3, Estante 2):")
-            item_desc = st.text_area("Descripción breve:")
-            
-            btn_crear = st.form_submit_button("Crear Componente")
-            
-            if btn_crear:
-                if not item_nom.strip() or not item_cat.strip():
-                    st.error("Por favor ingresá al menos el nombre y la categoría.")
-                else:
-                    nuevo_item = {
-                        "id": len(st.session_state["inventario"]) + 1,
-                        "nombre": item_nom,
-                        "categoria": item_cat,
-                        "stock": item_stk,
-                        "ubicacion": item_ubic,
-                        "descripcion": item_desc
-                    }
-                    st.session_state["inventario"].append(nuevo_item)
-                    st.success(f"Componente '{item_nom}' agregado al inventario.")
-                    st.rerun()
