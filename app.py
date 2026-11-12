@@ -25,7 +25,7 @@ st.set_page_config(
 
 
 SUPABASE_URL = st.secrets.get("SUPABASE_URL")
-SUPABASE_KEY = st.secrets.get("SUPABASE_KEY")
+SUPABASE_KEY = st.secrets.get("SUPABASE_PUBLISHABLE_KEY")
 SUPABASE_SECRET_KEY = st.secrets.get("SUPABASE_SECRET_KEY")
 CLAVE_MAESTRA_ADMIN = st.secrets.get("CLAVE_MAESTRA_ADMIN")
 
