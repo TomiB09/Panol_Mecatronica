@@ -1,3 +1,5 @@
+import truststore
+truststore.inject_into_ssl()
 import os
 from datetime import datetime
 from pathlib import Path
@@ -22,10 +24,10 @@ st.set_page_config(
 )
 
 
-SUPABASE_URL = os.getenv("SUPABASE_URL")
-SUPABASE_KEY = os.getenv("SUPABASE_PUBLISHABLE_KEY") or os.getenv("SUPABASE_ANON_KEY")
-SUPABASE_SECRET_KEY = os.getenv("SUPABASE_SECRET_KEY")
-CLAVE_MAESTRA_ADMIN = os.getenv("CLAVE_MAESTRA_ADMIN")
+SUPABASE_URL = st.secrets.get("SUPABASE_URL")
+SUPABASE_KEY = st.secrets.get("SUPABASE_KEY")
+SUPABASE_SECRET_KEY = st.secrets.get("SUPABASE_SECRET_KEY")
+CLAVE_MAESTRA_ADMIN = st.secrets.get("CLAVE_MAESTRA_ADMIN")
 
 
 def crear_cliente():
@@ -458,7 +460,7 @@ def nombre_categoria(item):
 def cargar_pedidos_alumno(alumno_id):
     return (
         supabase.table("pedidos")
-        .select("id,fecha,estado_id,estados(nombre),pedido_detalle(cantidad,componentes(nombre))")
+        .select("id,fecha,estado_id,estado(nombre),pedido_detalle(cantidad,componentes(nombre))")
         .eq("alumno_id", alumno_id)
         .order("fecha", desc=True)
         .execute()
@@ -471,7 +473,7 @@ def cargar_pedidos_alumno(alumno_id):
 def cargar_pedidos_profesor():
     return (
         supabase.table("pedidos")
-        .select("id,fecha,estado_id,alumno_id,profesor_id,estados(nombre),alumnos(curso,usuarios(nombre,apellido,email)),pedido_detalle(cantidad,componentes(nombre))")
+        .select("id,fecha,estado_id,alumno_id,profesor_id,estado(nombre),alumnos(curso,usuarios(nombre,apellido,email)),pedido_detalle(cantidad,componentes(nombre))")
         .order("fecha", desc=True)
         .execute()
         .data
@@ -493,7 +495,7 @@ def texto_detalle(pedido):
 
 
 def estado_nombre(pedido):
-    estado = pedido.get("estados") or {}
+    estado = pedido.get("estado") or {}
     if isinstance(estado, list):
         estado = estado[0] if estado else {}
     return estado.get("nombre", "sin estado").capitalize()
@@ -617,7 +619,7 @@ def panel_profesor(perfil):
         inventario = cargar_inventario()
         categorias = cargar_categorias()
         pedidos = cargar_pedidos_profesor()
-        estados = supabase.table("estados").select("id,nombre").execute().data
+        lista_estados = supabase.table("estado").select("id,nombre").execute().data
     except Exception as exc:
         error_db(exc, "cargar los datos administrativos")
         return
@@ -660,8 +662,8 @@ def panel_profesor(perfil):
                 else:
                     status.info(estado)
                 if estado.lower() in ("pendiente", "en proceso", "aprobado"):
-                    disponibles_estados = [e for e in estados if e["nombre"] in ("en proceso", "aprobado", "rechazado", "entregado")]
-                    etiquetas = {e["nombre"].capitalize(): e["nombre"] for e in disponibles_estados}
+                    disponibles_estado = [e for e in lista_estados if e["nombre"] in ("en proceso", "aprobado", "rechazado", "entregado")]
+                    etiquetas = {e["nombre"].capitalize(): e["nombre"] for e in disponibles_estado}
                     c1, c2 = st.columns([2, 1])
                     nuevo_estado = c1.selectbox("Actualizar estado", list(etiquetas.keys()), key=f"estado_{pedido['id']}")
                     if c2.button("Guardar estado", key=f"guardar_estado_{pedido['id']}", type="primary", use_container_width=True):
