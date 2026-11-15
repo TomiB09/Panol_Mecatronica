@@ -1,59 +1,78 @@
+# Librería externa que permite a Python usar los certificados de seguridad de Windows.
+# En redes escolares evita errores de certificado SSL al conectar con Supabase.
 import truststore
 truststore.inject_into_ssl()
+
+
+#interactuar con el sistema operativo
 import os
+
+
+#manejar fechas y horas
 from datetime import datetime
+
+
+# Herramienta para manejar rutas de archivos de forma segura en Windows, Mac o Linux.
 from pathlib import Path
 
 
+# Framework principal que convierte este script de Python en una aplicación web interactiva.
 import streamlit as st
+
+
+# Función para cargar variables desde un archivo .env
 from dotenv import load_dotenv
+
+
+#Supabase para consultar la base de datos y gestionar usuarios.
 from supabase import create_client
 
 
-# ------------------------------------------------------------
-# CONFIGURACION Y CONEXION
-# ------------------------------------------------------------
+# Intenta cargar variables de entorno desde un archivo .env si existiera en la carpeta.
 load_dotenv()
 
 
+# Configura los metadatos de la pestaña del navegador y el diseño general de la página.
+# IMPORTANTE: En Streamlit, st.set_page_config() siempre debe ser la primera instrucción visual ejecutada.
 st.set_page_config(
-    page_title="Pañol de Mecatrónica | ORT",
-    page_icon="⚙️",
-    layout="wide",
-    initial_sidebar_state="expanded",
+    page_title="Pañol de Mecatrónica | ORT",  # Título que aparece en la pestaña del navegador.
+    page_icon="⚙️",                           # Ícono (favicon) de la pestaña.
+    layout="wide",                            # Usa todo el ancho disponible de la pantalla en lugar de centrar angosto.
+    initial_sidebar_state="expanded",         # Muestra el panel lateral izquierdo abierto por defecto.
 )
 
 
-SUPABASE_URL = st.secrets.get("SUPABASE_URL")
-SUPABASE_KEY = st.secrets.get("SUPABASE_PUBLISHABLE_KEY")
-SUPABASE_SECRET_KEY = st.secrets.get("SUPABASE_SECRET_KEY")
-CLAVE_MAESTRA_ADMIN = st.secrets.get("CLAVE_MAESTRA_ADMIN")
+SUPABASE_URL = st.secrets.get("SUPABASE_URL")                        
+SUPABASE_KEY = st.secrets.get("SUPABASE_PUBLISHABLE_KEY")            
+SUPABASE_SECRET_KEY = st.secrets.get("SUPABASE_SECRET_KEY")          
+CLAVE_MAESTRA_ADMIN = st.secrets.get("CLAVE_MAESTRA_ADMIN")          
 
 
+# Crea un cliente estándar de Supabase usando la clave pública.
+# Este cliente respeta las reglas de seguridad (RLS) de la base de datos según el usuario que inicie sesión.
 def crear_cliente():
     if not SUPABASE_URL or not SUPABASE_KEY:
         return None
     return create_client(SUPABASE_URL, SUPABASE_KEY)
 
 
+# Crea un cliente con privilegios de administrador usando la clave secreta.
+# Solo se usa puntualmente al registrar un profesor para poder crear su cuenta directamente en Supabase Auth.
 def crear_cliente_admin():
     if not SUPABASE_URL or not SUPABASE_SECRET_KEY:
         return None
-
-
     return create_client(SUPABASE_URL, SUPABASE_SECRET_KEY)
 
 
-# Un cliente por sesión de Streamlit: evita compartir la sesión Auth
-# de un alumno/profesor con otro usuario.
+# st.session_state es una memoria privada que Streamlit crea por cada pestaña/usuario conectado.
+# Guardamos el cliente de Supabase allí para que la sesión de un alumno no se mezcle con la de otro usuario.
 if "supabase_client" not in st.session_state:
     st.session_state["supabase_client"] = crear_cliente()
 supabase = st.session_state["supabase_client"]
 
 
-# ------------------------------------------------------------
-# ESTILO VISUAL - inspirado en interfaces limpias tipo Apple
-# ------------------------------------------------------------
+# Inyecta código CSS directamente en la página web mediante st.markdown
+# para personalizar tipografía, colores de fondo, tarjetas, botones y el banner principal.
 st.markdown("""
 <style>
 @import url('https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800&display=swap');
@@ -90,19 +109,20 @@ div[data-testid="stAlert"] { border-radius: 14px; }
 hr { border-color: #e8e8ed; }
 </style>
 """, unsafe_allow_html=True)
-
-
-
-
+ 
+# Dibuja el encabezado superior con el logo institucional (si existe) y el banner azul.
 def mostrar_encabezado(subtitulo="Gestión inteligente de materiales y componentes"):
+    # Construye la ruta al archivo logo_ort.png ubicado en la misma carpeta que este script (__file__).
     logo = Path(__file__).parent / "logo_ort.png"
+    # Divide el ancho de pantalla en 2 columnas: la primera ocupa 1 parte y la segunda 5 partes.
     c1, c2 = st.columns([1, 5], vertical_alignment="center")
     with c1:
         if logo.exists():
-            st.image(str(logo), width=130)
+            st.image(str(logo), width=130)  # Si la imagen existe en la carpeta, la muestra.
         else:
-            st.markdown("## ⚙️ ORT")
+            st.markdown("## ⚙️ ORT")         # Si no existe, muestra un texto alternativo para no dar error.
     with c2:
+        # Dibuja la tarjeta degradada azul usando las clases CSS definidas arriba (.hero).
         st.markdown(
             f"""<div class="hero">
             <div class="hero-kicker">Escuela ORT · Mecatrónica</div>
@@ -113,23 +133,22 @@ def mostrar_encabezado(subtitulo="Gestión inteligente de materiales y component
         )
 
 
-
-
+# Muestra un mensaje de error amigable en pantalla y oculta el error técnico real dentro de un desplegable.
 def error_db(exc, accion="realizar la operación"):
     st.error(f"No se pudo {accion}.")
     with st.expander("Ver detalle técnico"):
         st.code(str(exc))
 
 
-
-
+# Función genérica para buscar un único registro en cualquier tabla de Supabase.
+# Equivale en SQL a: SELECT columnas FROM tabla WHERE columna = valor LIMIT 1;
 def consultar_uno(tabla, columnas, columna, valor):
     respuesta = supabase.table(tabla).select(columnas).eq(columna, valor).limit(1).execute()
+    # Devuelve el primer diccionario encontrado, o None si la lista está vacía.
     return respuesta.data[0] if respuesta.data else None
 
 
-
-
+# Dado el UUID de un usuario autenticado, busca sus datos personales y determina si es profesor o alumno.
 def obtener_perfil(user_id):
     usuario = consultar_uno("usuarios", "id,nombre,apellido,email", "id", user_id)
     alumno = consultar_uno("alumnos", "id,curso", "usuario_id", user_id)
@@ -141,13 +160,12 @@ def obtener_perfil(user_id):
     return None
 
 
+#En esta versión con interfaz, un Trigger configurado dentro de PostgreSQL en Supabase
+# escucha el alta en Auth y crea automáticamente las filas en 'usuarios' y 'alumnos'/'profesores'.
 def registrar_usuario(rol, nombre, apellido, email, password, dato_extra):
     email = email.strip().lower()
-
-
     if rol == "alumno":
-        # Registro público normal: Supabase crea la cuenta.
-        # El trigger SQL crea automáticamente usuarios y alumnos.
+        # sign_up() es el registro público estándar de Supabase Auth.
         resultado = supabase.auth.sign_up({
             "email": email,
             "password": password,
@@ -159,19 +177,13 @@ def registrar_usuario(rol, nombre, apellido, email, password, dato_extra):
                 }
             }
         })
-
-
     elif rol == "profesor":
-        # Registro administrativo: requiere la clave secreta del servidor.
         cliente_admin = crear_cliente_admin()
-
-
         if cliente_admin is None:
             raise Exception(
                 "Falta configurar SUPABASE_SECRET_KEY en el archivo .env."
             )
-
-
+        # admin.create_user() permite asignar 'app_metadata' con rol='profesor' que el usuario no puede falsificar.
         resultado = cliente_admin.auth.admin.create_user({
             "email": email,
             "password": password,
@@ -184,36 +196,31 @@ def registrar_usuario(rol, nombre, apellido, email, password, dato_extra):
                 "rol": "profesor"
             }
         })
-
-
     else:
         raise Exception("Rol de usuario no válido.")
-
-
     return resultado
 
 
+# Cierra la sesión en Supabase, borra los datos del usuario de la memoria de Streamlit y recarga la página.
 def cerrar_sesion():
     try:
         supabase.auth.sign_out()
     except Exception:
         pass
+    # Elimina 'user' y 'perfil' de st.session_state sin dar error si ya no existían.
     for key in ("user", "perfil"):
         st.session_state.pop(key, None)
+    # Fuerza a Streamlit a volver a ejecutar el script desde arriba (mostrará la pantalla de login).
     st.rerun()
 
 
-
-
+# Renderiza la pantalla completa de acceso con dos pestañas: "Iniciar sesión" y "Crear cuenta".
 def iniciar_sesion():
     mostrar_encabezado(
         "Ingresá o creá tu cuenta para consultar y administrar el pañol."
     )
-
-
+    # Crea 3 columnas para centrar la caja de login en el medio de la pantalla.
     _, centro, _ = st.columns([1, 1.4, 1])
-
-
     with centro:
         tab_login, tab_registro = st.tabs([
             "Iniciar sesión",
@@ -221,17 +228,13 @@ def iniciar_sesion():
         ])
 
 
-        # ------------------------------------------------
-        # INICIAR SESIÓN
-        # ------------------------------------------------
         with tab_login:
             st.markdown(
                 '<div class="section-title">Bienvenido</div>',
                 unsafe_allow_html=True
             )
             st.write("Usá tu correo y contraseña para continuar.")
-
-
+            # st.form() agrupa los campos para que la página no se recargue cada vez que escribes una letra.
             with st.form("login_form"):
                 email = st.text_input(
                     "Correo electrónico",
@@ -241,8 +244,6 @@ def iniciar_sesion():
                     "Contraseña",
                     type="password"
                 )
-
-
                 entrar = st.form_submit_button(
                     "Iniciar sesión",
                     type="primary",
@@ -250,36 +251,35 @@ def iniciar_sesion():
                 )
 
 
+            # Este bloque solo se ejecuta cuando el usuario presiona el botón "Iniciar sesión".
             if entrar:
                 if not email.strip() or not password:
                     st.warning("Completá el correo y la contraseña.")
                 else:
                     try:
+                        # Valida email y contraseña contra Supabase Auth.
                         result = supabase.auth.sign_in_with_password({
                             "email": email.strip(),
                             "password": password
                         })
-
-
                         user = result.user
+                        # Busca el perfil asociado en las tablas 'usuarios', 'alumnos' o 'profesores'.
                         perfil = obtener_perfil(user.id)
-
-
                         if not perfil:
+                            # Si existe en Auth pero no tiene fila en alumnos/profesores, cierra sesión por seguridad.
                             supabase.auth.sign_out()
                             st.error(
                                 "La cuenta inició sesión, pero no está "
                                 "vinculada a un alumno o profesor."
                             )
                         else:
+                            # Guarda usuario y perfil en la memoria de sesión y recarga la web para entrar al panel.
                             st.session_state["user"] = {
                                 "id": user.id,
                                 "email": user.email
                             }
                             st.session_state["perfil"] = perfil
                             st.rerun()
-
-
                     except Exception as exc:
                         st.error(
                             "No se pudo iniciar sesión. "
@@ -289,39 +289,28 @@ def iniciar_sesion():
                             st.code(str(exc))
 
 
-        # ------------------------------------------------
-        # REGISTRARSE
-        # ------------------------------------------------
         with tab_registro:
             st.markdown(
                 '<div class="section-title">Crear una cuenta</div>',
                 unsafe_allow_html=True
             )
             st.write("Completá tus datos para registrarte.")
-
-
+            # El selector de rol va FUERA del st.form() para que al cambiar entre Alumno y Profesor
+            # la pantalla se actualice al instante mostrando "Curso" o "Materia + Clave maestra".
             rol = st.radio(
                 "Tipo de cuenta",
                 ["Alumno", "Profesor"],
                 horizontal=True,
                 key="tipo_registro"
             )
-
-
             es_profesor = rol == "Profesor"
-
-
             with st.form("registro_form"):
                 nombre = st.text_input("Nombre")
                 apellido = st.text_input("Apellido")
-
-
                 email_registro = st.text_input(
                     "Correo electrónico",
                     placeholder="nombre@ort.edu.ar"
                 )
-
-
                 if es_profesor:
                     dato_extra = st.text_input(
                         "Materia o área"
@@ -336,20 +325,14 @@ def iniciar_sesion():
                         placeholder="Ej. 6° Informática"
                     )
                     clave_admin = ""
-
-
                 password_registro = st.text_input(
                     "Contraseña",
                     type="password"
                 )
-
-
                 confirmar_password = st.text_input(
                     "Confirmar contraseña",
                     type="password"
                 )
-
-
                 registrar = st.form_submit_button(
                     "Crear cuenta",
                     type="primary",
@@ -357,6 +340,7 @@ def iniciar_sesion():
                 )
 
 
+            # Validaciones de formulario al presionar "Crear cuenta".
             if registrar:
                 if not all([
                     nombre.strip(),
@@ -367,33 +351,21 @@ def iniciar_sesion():
                     confirmar_password
                 ]):
                     st.warning("Completá todos los campos.")
-
-
                 elif "@" not in email_registro:
                     st.warning("Ingresá un correo electrónico válido.")
-
-
                 elif len(password_registro) < 8:
                     st.warning(
                         "La contraseña debe tener al menos 8 caracteres."
                     )
-
-
                 elif password_registro != confirmar_password:
                     st.error("Las contraseñas no coinciden.")
-
-
                 elif es_profesor and not CLAVE_MAESTRA_ADMIN:
                     st.error(
                         "No está configurada la clave administrativa "
                         "en el servidor."
                     )
-
-
                 elif es_profesor and clave_admin != CLAVE_MAESTRA_ADMIN:
                     st.error("La clave de registro de profesor es incorrecta.")
-
-
                 else:
                     try:
                         registrar_usuario(
@@ -404,21 +376,15 @@ def iniciar_sesion():
                             password=password_registro,
                             dato_extra=dato_extra
                         )
-
-
                         st.success(
                             "¡Cuenta creada correctamente! "
                             "Ahora podés iniciar sesión."
                         )
-
-
                         st.info(
                             "Si Supabase tiene habilitada la confirmación "
                             "por correo, primero revisá tu bandeja de entrada "
                             "y confirmá tu dirección."
                         )
-
-
                     except Exception as exc:
                         st.error(
                             "No se pudo crear la cuenta. "
@@ -428,6 +394,7 @@ def iniciar_sesion():
                             st.code(str(exc))
 
 
+# Trae todos los componentes ordenados alfabéticamente junto con el nombre de su categoría (JOIN).
 def cargar_inventario():
     return (
         supabase.table("componentes")
@@ -438,14 +405,12 @@ def cargar_inventario():
     )
 
 
-
-
+# Trae el listado de todas las categorías disponibles ordenadas por nombre.
 def cargar_categorias():
     return supabase.table("categorias").select("id,nombre").order("nombre").execute().data
 
 
-
-
+# Extrae de forma segura el nombre de la categoría desde el diccionario devuelto por Supabase.
 def nombre_categoria(item):
     relacion = item.get("categorias")
     if isinstance(relacion, dict):
@@ -455,21 +420,19 @@ def nombre_categoria(item):
     return "Sin categoría"
 
 
-
-
+# Trae el historial de pedidos de un alumno puntual haciendo JOIN con 'estado', 'pedido_detalle' y 'componentes'.
 def cargar_pedidos_alumno(alumno_id):
     return (
         supabase.table("pedidos")
         .select("id,fecha,estado_id,estado(nombre),pedido_detalle(cantidad,componentes(nombre))")
         .eq("alumno_id", alumno_id)
-        .order("fecha", desc=True)
+        .order("fecha", desc=True)  # Ordena del pedido más reciente al más antiguo.
         .execute()
         .data
     )
 
 
-
-
+# Trae TODOS los pedidos del sistema para el profesor, incluyendo datos del alumno y usuario solicitante.
 def cargar_pedidos_profesor():
     return (
         supabase.table("pedidos")
@@ -480,8 +443,7 @@ def cargar_pedidos_profesor():
     )
 
 
-
-
+# Convierte la lista de detalles de un pedido en un texto
 def texto_detalle(pedido):
     partes = []
     for detalle in pedido.get("pedido_detalle", []) or []:
@@ -492,8 +454,7 @@ def texto_detalle(pedido):
     return ", ".join(partes) or "Sin detalle"
 
 
-
-
+# Extrae el nombre del estado del pedido (ej. "pendiente")
 def estado_nombre(pedido):
     estado = pedido.get("estado") or {}
     if isinstance(estado, list):
@@ -503,10 +464,15 @@ def estado_nombre(pedido):
 
 
 
+
+
 def panel_alumno(perfil):
     st.markdown('<div class="eyebrow">Área del alumno</div><div class="section-title">Tu espacio de materiales</div>', unsafe_allow_html=True)
     nombre = f"{perfil['usuario'].get('nombre', '')} {perfil['usuario'].get('apellido', '')}".strip() or st.session_state["user"]["email"]
     st.caption(f"{nombre} · Curso {perfil['perfil'].get('curso', 'No indicado')}")
+
+
+    # Descarga inicial de datos desde Supabase para poblar las 3 pestañas del alumno.
     try:
         inventario = cargar_inventario()
         categorias = cargar_categorias()
@@ -516,6 +482,7 @@ def panel_alumno(perfil):
         return
 
 
+    # Calcula indicadores rápidos en memoria y los muestra en 3 tarjetas superiores.
     total = len(inventario)
     disponibles = sum(1 for x in inventario if (x.get("cantidad") or 0) > 0)
     bajo_stock = sum(1 for x in inventario if (x.get("cantidad") or 0) <= (x.get("stock_minimo") or 0))
@@ -525,24 +492,33 @@ def panel_alumno(perfil):
     m3.metric("En nivel mínimo", bajo_stock)
 
 
+    # Divide el panel del alumno en 3 pestañas navegables.
     tab_inv, tab_pedir, tab_mios = st.tabs(["  Inventario  ", "  Solicitar material  ", "  Mis solicitudes  "])
 
 
+    # --- PESTAÑA 1: EXPLORAR INVENTARIO ---
     with tab_inv:
         st.markdown("#### Explorar inventario")
         c1, c2 = st.columns([2, 1])
         busqueda = c1.text_input("Buscar", placeholder="Ej. Arduino, motor, sensor...")
         opciones = ["Todas"] + [c["nombre"] for c in categorias]
         cat = c2.selectbox("Categoría", opciones)
+
+
+        # Filtra la lista descargada en memoria según la categoría elegida y el texto buscado.
         filtrados = inventario
         if cat != "Todas":
             categoria_id = next((c["id"] for c in categorias if c["nombre"] == cat), None)
             filtrados = [x for x in filtrados if x.get("categoria_id") == categoria_id]
         if busqueda:
+            # .casefold() compara texto ignorando mayúsculas y tildes mejor que .lower().
             filtrados = [x for x in filtrados if busqueda.casefold() in (x.get("nombre") or "").casefold() or busqueda.casefold() in (x.get("descripcion") or "").casefold()]
+
+
         if not filtrados:
             st.info("No hay componentes que coincidan con la búsqueda.")
         else:
+            # Dibuja una tarjeta con borde por cada componente filtrado.
             for item in filtrados:
                 cantidad = item.get("cantidad") or 0
                 minimo = item.get("stock_minimo") or 0
@@ -552,6 +528,7 @@ def panel_alumno(perfil):
                     a.caption(f"{item.get('descripcion') or 'Sin descripción'} · {nombre_categoria(item)}")
                     a.caption(f"Ubicación: {item.get('ubicacion') or 'No asignada'}")
                     b.metric("Disponibles", cantidad)
+                    # Muestra una etiqueta de color según el nivel de stock.
                     if cantidad == 0:
                         c.error("Sin stock")
                     elif cantidad <= minimo:
@@ -560,22 +537,31 @@ def panel_alumno(perfil):
                         c.success("Disponible")
 
 
+    # --- PESTAÑA 2: SOLICITAR MATERIAL ---
     with tab_pedir:
         st.markdown("#### Nueva solicitud")
+        # Filtra solo los componentes que tienen al menos 1 unidad disponible.
         disponibles_items = [x for x in inventario if (x.get("cantidad") or 0) > 0]
         if not disponibles_items:
             st.info("En este momento no hay materiales con stock.")
         else:
+            # Crea un diccionario donde la clave es el texto visible en el desplegable y el valor es el objeto componente.
             opciones_material = {f"{x['nombre']} · {x.get('cantidad', 0)} disponibles": x for x in disponibles_items}
             with st.form("crear_pedido_form"):
                 elegido = st.selectbox("Material", list(opciones_material.keys()))
                 material = opciones_material[elegido]
                 st.caption(f"Categoría: {nombre_categoria(material)} · Ubicación: {material.get('ubicacion') or 'No asignada'}")
+                # Limita el selector numérico para que nunca se pueda pedir más del stock disponible.
                 cantidad = st.number_input("Cantidad solicitada", min_value=1, max_value=max(1, int(material.get("cantidad") or 1)), value=1, step=1)
                 motivo = st.text_area("¿Para qué clase o proyecto lo necesitás?", placeholder="Contanos brevemente el uso...")
                 enviar = st.form_submit_button("Enviar solicitud", type="primary", use_container_width=True)
+
+
             if enviar:
                 try:
+                    # Llama a una función almacenada (RPC) dentro de PostgreSQL llamada 'crear_pedido'.
+                    # Esa función identifica automáticamente al alumno mediante su sesión en Supabase Auth
+                    # e inserta el pedido y su detalle en una sola transacción segura.
                     supabase.rpc("crear_pedido", {
                         "p_componente_id": material["id"],
                         "p_cantidad": int(cantidad),
@@ -588,6 +574,7 @@ def panel_alumno(perfil):
                     st.caption("La función crear_pedido usa el usuario autenticado para identificar al alumno.")
 
 
+    # --- PESTAÑA 3: MIS SOLICITUDES ---
     with tab_mios:
         st.markdown("#### Seguimiento")
         if not pedidos:
@@ -599,6 +586,7 @@ def panel_alumno(perfil):
                 a.markdown(f"**Solicitud #{pedido['id']}**")
                 a.write(texto_detalle(pedido))
                 a.caption(f"Fecha: {pedido.get('fecha', 'No disponible')}")
+                # Colorea la insignia del estado según corresponda.
                 if estado == "Pendiente":
                     b.warning(estado)
                 elif estado == "Rechazado":
@@ -615,6 +603,9 @@ def panel_profesor(perfil):
     st.markdown('<div class="eyebrow">Administración</div><div class="section-title">Panel del pañol</div>', unsafe_allow_html=True)
     nombre = f"{perfil['usuario'].get('nombre', '')} {perfil['usuario'].get('apellido', '')}".strip()
     st.caption(f"{nombre or st.session_state['user']['email']} · Profesor")
+
+
+    # Descarga inventario, categorías, todos los pedidos y el catálogo de estados posibles.
     try:
         inventario = cargar_inventario()
         categorias = cargar_categorias()
@@ -625,6 +616,7 @@ def panel_profesor(perfil):
         return
 
 
+    # Calcula métricas generales para el tablero del profesor.
     pendientes = sum(1 for p in pedidos if estado_nombre(p).lower() == "pendiente")
     bajo_stock = sum(1 for x in inventario if (x.get("cantidad") or 0) <= (x.get("stock_minimo") or 0))
     m1, m2, m3 = st.columns(3)
@@ -633,15 +625,18 @@ def panel_profesor(perfil):
     m3.metric("Alertas de stock", bajo_stock)
 
 
+    # Crea las 4 pestañas de administración.
     tab_ped, tab_inv, tab_nuevo, tab_cat = st.tabs(["  Solicitudes  ", "  Inventario  ", "  Agregar componente  ", "  Categorías  "])
 
 
+    # --- PESTAÑA 1: GESTIONAR SOLICITUDES ---
     with tab_ped:
         st.markdown("#### Solicitudes de alumnos")
         if not pedidos:
             st.info("Todavía no hay solicitudes.")
         for pedido in pedidos:
             estado = estado_nombre(pedido)
+            # Desempaqueta los datos anidados del alumno y su usuario de forma segura.
             alumno = pedido.get("alumnos") or {}
             if isinstance(alumno, list):
                 alumno = alumno[0] if alumno else {}
@@ -649,6 +644,8 @@ def panel_profesor(perfil):
             if isinstance(usuario, list):
                 usuario = usuario[0] if usuario else {}
             alumno_nombre = f"{usuario.get('nombre', '')} {usuario.get('apellido', '')}".strip() or usuario.get("email", "Alumno")
+
+
             with st.container(border=True):
                 top, status = st.columns([4, 1])
                 top.markdown(f"**Solicitud #{pedido['id']} · {texto_detalle(pedido)}**")
@@ -661,13 +658,19 @@ def panel_profesor(perfil):
                     status.success(estado)
                 else:
                     status.info(estado)
+
+
+                # Solo permite cambiar el estado si el pedido sigue activo (no rechazado ni ya entregado).
                 if estado.lower() in ("pendiente", "en proceso", "aprobado"):
                     disponibles_estado = [e for e in lista_estados if e["nombre"] in ("en proceso", "aprobado", "rechazado", "entregado")]
                     etiquetas = {e["nombre"].capitalize(): e["nombre"] for e in disponibles_estado}
                     c1, c2 = st.columns([2, 1])
+                    # Cada widget dentro de un bucle for necesita un 'key' único para que Streamlit no los confunda.
                     nuevo_estado = c1.selectbox("Actualizar estado", list(etiquetas.keys()), key=f"estado_{pedido['id']}")
                     if c2.button("Guardar estado", key=f"guardar_estado_{pedido['id']}", type="primary", use_container_width=True):
                         try:
+                            # Llama a la función SQL 'actualizar_estado_pedido' en Supabase.
+                            # Cuando pasa a 'entregado', esa función en la base de datos descuenta el stock automáticamente.
                             supabase.rpc("actualizar_estado_pedido", {
                                 "p_pedido_id": pedido["id"],
                                 "p_nuevo_estado": etiquetas[nuevo_estado].lower(),
@@ -679,13 +682,17 @@ def panel_profesor(perfil):
                             st.caption("La entrega descuenta el stock desde Supabase. No se descuenta al crear ni al aprobar el pedido.")
 
 
+
+
     with tab_inv:
         st.markdown("#### Editar inventario")
         for item in inventario:
+            # Crea un acordeón desplegable por cada componente para no saturar la pantalla.
             with st.expander(f"{item['nombre']} · {item.get('cantidad', 0)} unidades"):
                 with st.form(f"editar_{item['id']}"):
                     c1, c2 = st.columns(2)
                     nombre = c1.text_input("Nombre", value=item["nombre"])
+                    # Busca qué categoría tiene actualmente el componente para preseleccionarla en el desplegable.
                     categoria_actual = next((c["id"] for c in categorias if c["id"] == item.get("categoria_id")), categorias[0]["id"] if categorias else None)
                     categoria_nombres = {c["nombre"]: c["id"] for c in categorias}
                     categoria_nombre_actual = next((n for n, cid in categoria_nombres.items() if cid == categoria_actual), None)
@@ -697,6 +704,8 @@ def panel_profesor(perfil):
                     ubicacion = c1.text_input("Ubicación", value=item.get("ubicacion") or "")
                     descripcion = c2.text_area("Descripción", value=item.get("descripcion") or "")
                     guardar = st.form_submit_button("Guardar cambios", type="primary")
+
+
                 if guardar:
                     if not nombre.strip():
                         st.error("El nombre no puede estar vacío.")
@@ -704,6 +713,7 @@ def panel_profesor(perfil):
                         st.error("Las cantidades no pueden ser negativas.")
                     else:
                         try:
+                            # Ejecuta UPDATE en la tabla 'componentes' filtrando por el id del ítem (.eq).
                             supabase.table("componentes").update({
                                 "nombre": nombre.strip(),
                                 "categoria_id": categoria_nombres.get(cat_nombre) if cat_nombre else None,
@@ -718,6 +728,7 @@ def panel_profesor(perfil):
                             error_db(exc, "guardar los cambios")
 
 
+    # --- PESTAÑA 3: AGREGAR NUEVO COMPONENTE ---
     with tab_nuevo:
         st.markdown("#### Incorporar un componente")
         if not categorias:
@@ -732,12 +743,16 @@ def panel_profesor(perfil):
                 ubicacion = st.text_input("Ubicación", placeholder="Ej. Cajón A1")
                 descripcion = st.text_area("Descripción")
                 crear = st.form_submit_button("Agregar al inventario", type="primary", use_container_width=True)
+
+
             if crear:
                 if not nombre.strip():
                     st.error("Ingresá el nombre del componente.")
                 else:
                     try:
+                        # Obtiene el ID numérico de la categoría elegida por su nombre.
                         cat_id = next(c["id"] for c in categorias if c["nombre"] == cat)
+                        # Ejecuta INSERT en la tabla 'componentes'.
                         supabase.table("componentes").insert({
                             "nombre": nombre.strip(),
                             "descripcion": descripcion.strip() or None,
@@ -752,6 +767,7 @@ def panel_profesor(perfil):
                         error_db(exc, "agregar el componente")
 
 
+    # --- PESTAÑA 4: ADMINISTRAR CATEGORÍAS ---
     with tab_cat:
         st.markdown("#### Administrar categorías")
         for categoria in categorias:
@@ -760,11 +776,14 @@ def panel_profesor(perfil):
             nueva = st.text_input("Nombre de la nueva categoría")
             descripcion_cat = st.text_input("Descripción (opcional)")
             agregar = st.form_submit_button("Crear categoría", type="primary")
+
+
         if agregar:
             if not nueva.strip():
                 st.warning("Escribí un nombre para la categoría.")
             else:
                 try:
+                    # Ejecuta INSERT en la tabla 'categorias'.
                     supabase.table("categorias").insert({
                         "nombre": nueva.strip(),
                         "descripcion": descripcion_cat.strip() or None,
@@ -775,25 +794,22 @@ def panel_profesor(perfil):
                     error_db(exc, "crear la categoría")
 
 
-
-
-# ------------------------------------------------------------
-# INICIO
-# ------------------------------------------------------------
+# 1. Verifica que las claves de Supabase estén configuradas en secrets.toml; si faltan, detiene la app.
 if supabase is None:
     mostrar_encabezado()
     st.error("Falta configurar la conexión con Supabase.")
     st.markdown("Creá un archivo **.env** en la carpeta del proyecto con estas variables:")
     st.code("SUPABASE_URL=https://TU-PROYECTO.supabase.co\nSUPABASE_PUBLISHABLE_KEY=TU_CLAVE_PUBLICABLE")
-    st.stop()
+    st.stop()  # Detiene la ejecución del script aquí para no renderizar nada más.
 
 
+# 2. Si no hay un usuario guardado en la sesión actual, muestra la pantalla de Login/Registro y frena el script.
 if "user" not in st.session_state:
     iniciar_sesion()
     st.stop()
 
 
-# Confirmar que el perfil todavía corresponde al usuario autenticado.
+# 3. Si existe 'user' en sesión pero falta 'perfil', intenta recuperarlo desde la base de datos.
 if "perfil" not in st.session_state:
     try:
         st.session_state["perfil"] = obtener_perfil(st.session_state["user"]["id"])
@@ -801,6 +817,7 @@ if "perfil" not in st.session_state:
         st.session_state["perfil"] = None
 
 
+# 4. Si el usuario autenticado no tiene perfil válido en 'alumnos' o 'profesores', bloquea el acceso.
 if not st.session_state.get("perfil"):
     st.warning("Tu usuario no está asociado a un registro de alumno o profesor.")
     if st.button("Cerrar sesión"):
@@ -808,6 +825,7 @@ if not st.session_state.get("perfil"):
     st.stop()
 
 
+# 5. Si pasó todas las validaciones anteriores, dibuja la barra lateral izquierda con los datos del usuario.
 perfil = st.session_state["perfil"]
 with st.sidebar:
     st.markdown("## ⚙️ Pañol ORT")
@@ -822,6 +840,7 @@ with st.sidebar:
     st.caption("Inventario centralizado en Supabase")
 
 
+# 6. Renderiza el encabezado principal y abre el panel correspondiente según el rol del usuario.
 mostrar_encabezado("Un espacio simple y ordenado para consultar, solicitar y administrar materiales.")
 try:
     if perfil["rol"] == "alumno":
@@ -830,8 +849,3 @@ try:
         panel_profesor(perfil)
 except Exception as exc:
     error_db(exc, "mostrar la aplicación")
-
-
-
-
-
