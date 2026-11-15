@@ -42,10 +42,21 @@ st.set_page_config(
 )
 
 
-SUPABASE_URL = st.secrets.get("SUPABASE_URL")                        
-SUPABASE_KEY = st.secrets.get("SUPABASE_PUBLISHABLE_KEY")            
-SUPABASE_SECRET_KEY = st.secrets.get("SUPABASE_SECRET_KEY")          
-CLAVE_MAESTRA_ADMIN = st.secrets.get("CLAVE_MAESTRA_ADMIN")          
+# Lee las credenciales desde .streamlit/secrets.toml o desde variables de entorno (.env) sin lanzar error si falta el archivo.
+def obtener_secreto(clave):
+    try:
+        valor = st.secrets.get(clave)
+        if valor:
+            return valor
+    except Exception:
+        pass
+    return os.getenv(clave)
+
+
+SUPABASE_URL = obtener_secreto("SUPABASE_URL")
+SUPABASE_KEY = obtener_secreto("SUPABASE_PUBLISHABLE_KEY")
+SUPABASE_SECRET_KEY = obtener_secreto("SUPABASE_SECRET_KEY")
+CLAVE_MAESTRA_ADMIN = obtener_secreto("CLAVE_MAESTRA_ADMIN")
 
 
 # Crea un cliente estándar de Supabase usando la clave pública.
@@ -57,7 +68,7 @@ def crear_cliente():
 
 
 # Crea un cliente con privilegios de administrador usando la clave secreta.
-# Solo se usa puntualmente al registrar un profesor para poder crear su cuenta directamente en Supabase Auth.
+# Permite crear cuentas directamente en Supabase Auth sin límites de envío de correos.
 def crear_cliente_admin():
     if not SUPABASE_URL or not SUPABASE_SECRET_KEY:
         return None
@@ -164,30 +175,35 @@ def obtener_perfil(user_id):
 # escucha el alta en Auth y crea automáticamente las filas en 'usuarios' y 'alumnos'/'profesores'.
 def registrar_usuario(rol, nombre, apellido, email, password, dato_extra):
     email = email.strip().lower()
+    # Se usa el cliente administrador con "email_confirm": True (igual que en main_2.py)
+    # para crear cuentas ilimitadas sin enviar correos y evitar el error "email rate limit exceeded".
+    cliente_admin = crear_cliente_admin()
+    if cliente_admin is None:
+        raise Exception(
+            "Falta configurar SUPABASE_SECRET_KEY en el archivo .streamlit/secrets.toml."
+        )
+
+
     if rol == "alumno":
-        # sign_up() es el registro público estándar de Supabase Auth.
-        resultado = supabase.auth.sign_up({
-            "email": email,
-            "password": password,
-            "options": {
-                "data": {
-                    "nombre": nombre.strip(),
-                    "apellido": apellido.strip(),
-                    "curso": dato_extra.strip(),
-                }
-            }
-        })
-    elif rol == "profesor":
-        cliente_admin = crear_cliente_admin()
-        if cliente_admin is None:
-            raise Exception(
-                "Falta configurar SUPABASE_SECRET_KEY en el archivo .env."
-            )
-        # admin.create_user() permite asignar 'app_metadata' con rol='profesor' que el usuario no puede falsificar.
         resultado = cliente_admin.auth.admin.create_user({
             "email": email,
             "password": password,
+            "email_confirm": True,
             "user_metadata": {
+                "rol": "alumno",
+                "nombre": nombre.strip(),
+                "apellido": apellido.strip(),
+                "curso": dato_extra.strip(),
+            }
+        })
+    elif rol == "profesor":
+        # Se envía 'rol' tanto en user_metadata como en app_metadata.
+        resultado = cliente_admin.auth.admin.create_user({
+            "email": email,
+            "password": password,
+            "email_confirm": True,
+            "user_metadata": {
+                "rol": "profesor",
                 "nombre": nombre.strip(),
                 "apellido": apellido.strip(),
                 "materia": dato_extra.strip(),
@@ -198,7 +214,97 @@ def registrar_usuario(rol, nombre, apellido, email, password, dato_extra):
         })
     else:
         raise Exception("Rol de usuario no válido.")
+
+
+    # Garantiza que el usuario quede en 'profesores' o 'alumnos' según el rol elegido,
+    # corrigiendo si el Trigger SQL de Supabase lo insertó por defecto en 'alumnos'.
+    user_id = resultado.user.id if resultado and resultado.user else None
+    if user_id:
+        existe_usuario = cliente_admin.table("usuarios").select("id").eq("id", user_id).execute().data
+        if not existe_usuario:
+            cliente_admin.table("usuarios").insert({
+                "id": user_id,
+                "nombre": nombre.strip(),
+                "apellido": apellido.strip(),
+                "email": email,
+            }).execute()
+
+
+        if rol == "profesor":
+            cliente_admin.table("alumnos").delete().eq("usuario_id", user_id).execute()
+            existe_prof = cliente_admin.table("profesores").select("id").eq("usuario_id", user_id).execute().data
+            if not existe_prof:
+                cliente_admin.table("profesores").insert({
+                    "usuario_id": user_id,
+                    "materia": dato_extra.strip(),
+                }).execute()
+        else:
+            existe_alum = cliente_admin.table("alumnos").select("id").eq("usuario_id", user_id).execute().data
+            if not existe_alum:
+                cliente_admin.table("alumnos").insert({
+                    "usuario_id": user_id,
+                    "curso": dato_extra.strip(),
+                }).execute()
+
+
     return resultado
+
+
+# Callback que se ejecuta inmediatamente al presionar "Eliminar componente" (antes de redibujar la interfaz).
+# Verifica la confirmación, revisa que no pertenezca a ningún pedido y lo elimina definitivamente de Supabase.
+def eliminar_componente_callback(comp_id, comp_nombre):
+    if not st.session_state.get(f"confirmar_eliminar_{comp_id}", False):
+        st.session_state["feedback_inv"] = (
+            "warning",
+            f"Marcá la casilla de confirmación antes de eliminar «{comp_nombre}»."
+        )
+        return
+
+
+    try:
+        # Usa el cliente administrador para evitar que políticas RLS bloqueen consultas o borrados.
+        cliente_db = crear_cliente_admin() or supabase
+
+
+        # Revisa que el componente no esté en un pedido para que no quede fantasma y cause error.
+        en_pedidos = (
+            cliente_db.table("pedido_detalle")
+            .select("id,pedido_id")
+            .eq("componente_id", comp_id)
+            .execute()
+            .data
+        )
+        if en_pedidos:
+            st.session_state["feedback_inv"] = (
+                "error",
+                f"No se puede eliminar «{comp_nombre}» porque pertenece a {len(en_pedidos)} pedido(s) registrado(s)."
+            )
+            return
+
+
+        # Ejecuta DELETE en la tabla 'componentes' filtrando por el id del ítem.
+        respuesta = cliente_db.table("componentes").delete().eq("id", comp_id).execute()
+
+
+        # Verifica que Supabase realmente haya eliminado la fila.
+        if not respuesta.data:
+            st.session_state["feedback_inv"] = (
+                "error",
+                f"Supabase no eliminó «{comp_nombre}». Verificá SUPABASE_SECRET_KEY en secrets.toml."
+            )
+            return
+
+
+        st.session_state.pop(f"confirmar_eliminar_{comp_id}", None)
+        st.session_state["feedback_inv"] = (
+            "success",
+            f"Componente «{comp_nombre}» eliminado correctamente de Supabase."
+        )
+    except Exception as exc:
+        st.session_state["feedback_inv"] = (
+            "error",
+            f"No se pudo eliminar «{comp_nombre}»: {exc}"
+        )
 
 
 # Cierra la sesión en Supabase, borra los datos del usuario de la memoria de Streamlit y recarga la página.
@@ -380,11 +486,6 @@ def iniciar_sesion():
                             "¡Cuenta creada correctamente! "
                             "Ahora podés iniciar sesión."
                         )
-                        st.info(
-                            "Si Supabase tiene habilitada la confirmación "
-                            "por correo, primero revisá tu bandeja de entrada "
-                            "y confirmá tu dirección."
-                        )
                     except Exception as exc:
                         st.error(
                             "No se pudo crear la cuenta. "
@@ -545,18 +646,18 @@ def panel_alumno(perfil):
         if not disponibles_items:
             st.info("En este momento no hay materiales con stock.")
         else:
-            # Crea un diccionario donde la clave es el texto visible en el desplegable y el valor es el objeto componente.
+          # Crea un diccionario donde la clave es el texto visible en el desplegable y el valor es el objeto componente.
             opciones_material = {f"{x['nombre']} · {x.get('cantidad', 0)} disponibles": x for x in disponibles_items}
+            # El selector de material va FUERA del st.form() para que al cambiar de componente
+            # se actualice al instante el stock máximo disponible en el campo numérico.
+            elegido = st.selectbox("Material", list(opciones_material.keys()))
+            material = opciones_material[elegido]
+            st.caption(f"Categoría: {nombre_categoria(material)} · Ubicación: {material.get('ubicacion') or 'No asignada'}")
             with st.form("crear_pedido_form"):
-                elegido = st.selectbox("Material", list(opciones_material.keys()))
-                material = opciones_material[elegido]
-                st.caption(f"Categoría: {nombre_categoria(material)} · Ubicación: {material.get('ubicacion') or 'No asignada'}")
                 # Limita el selector numérico para que nunca se pueda pedir más del stock disponible.
                 cantidad = st.number_input("Cantidad solicitada", min_value=1, max_value=max(1, int(material.get("cantidad") or 1)), value=1, step=1)
                 motivo = st.text_area("¿Para qué clase o proyecto lo necesitás?", placeholder="Contanos brevemente el uso...")
                 enviar = st.form_submit_button("Enviar solicitud", type="primary", use_container_width=True)
-
-
             if enviar:
                 try:
                     # Llama a una función almacenada (RPC) dentro de PostgreSQL llamada 'crear_pedido'.
@@ -686,6 +787,17 @@ def panel_profesor(perfil):
 
     with tab_inv:
         st.markdown("#### Editar inventario")
+        # Muestra el resultado de la última operación de borrado (éxito, advertencia o error).
+        if "feedback_inv" in st.session_state:
+            tipo_msg, texto_msg = st.session_state.pop("feedback_inv")
+            if tipo_msg == "success":
+                st.success(texto_msg)
+            elif tipo_msg == "warning":
+                st.warning(texto_msg)
+            else:
+                st.error(texto_msg)
+
+
         for item in inventario:
             # Crea un acordeón desplegable por cada componente para no saturar la pantalla.
             with st.expander(f"{item['nombre']} · {item.get('cantidad', 0)} unidades"):
@@ -726,6 +838,24 @@ def panel_profesor(perfil):
                             st.rerun()
                         except Exception as exc:
                             error_db(exc, "guardar los cambios")
+
+
+                # --- ELIMINAR COMPONENTE (misma lógica que eliminar_componente() de main_2.py) ---
+                st.divider()
+                col_del1, col_del2 = st.columns([2, 1], vertical_alignment="center")
+                # Casilla de confirmación manual para no borrar componentes por accidente.
+                col_del1.checkbox(
+                    f"Confirmar eliminación de «{item['nombre']}»",
+                    key=f"confirmar_eliminar_{item['id']}"
+                )
+                # Ejecuta el borrado mediante on_click para que Streamlit lo procese antes de recargar.
+                col_del2.button(
+                    "Eliminar componente",
+                    key=f"eliminar_{item['id']}",
+                    use_container_width=True,
+                    on_click=eliminar_componente_callback,
+                    args=(item["id"], item["nombre"])
+                )
 
 
     # --- PESTAÑA 3: AGREGAR NUEVO COMPONENTE ---
@@ -798,8 +928,8 @@ def panel_profesor(perfil):
 if supabase is None:
     mostrar_encabezado()
     st.error("Falta configurar la conexión con Supabase.")
-    st.markdown("Creá un archivo **.env** en la carpeta del proyecto con estas variables:")
-    st.code("SUPABASE_URL=https://TU-PROYECTO.supabase.co\nSUPABASE_PUBLISHABLE_KEY=TU_CLAVE_PUBLICABLE")
+    st.markdown("Creá un archivo **.streamlit/secrets.toml** en la carpeta del proyecto con estas variables:")
+    st.code('SUPABASE_URL="https://TU-PROYECTO.supabase.co"\nSUPABASE_PUBLISHABLE_KEY="TU_CLAVE_PUBLICABLE"\nSUPABASE_SECRET_KEY="TU_CLAVE_SECRETA"')
     st.stop()  # Detiene la ejecución del script aquí para no renderizar nada más.
 
 
@@ -848,4 +978,6 @@ try:
     else:
         panel_profesor(perfil)
 except Exception as exc:
-    error_db(exc, "mostrar la aplicación")
+    error_db(exc, "mostrar la aplicación")  
+
+
